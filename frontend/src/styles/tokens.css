@@ -1,0 +1,87 @@
+/**
+ * Design tokens — single source of truth for colors, type, radii, shadows, motion.
+ *
+ * Every component should inherit from these via Tailwind utilities (see tailwind.config.js)
+ * or direct var(--token) references. Never hardcode colors or shadows.
+ */
+
+:root {
+  /* ============================================================
+     COLOR — Primary (navy authority)
+     ============================================================ */
+  --primary-50:  #F0F4F9;
+  --primary-100: #D9E2EC;
+  --primary-200: #BCCCDC;
+  --primary-300: #9FB3C8;
+  --primary-400: #829AB1;
+  --primary-500: #486581;
+  --primary-600: #334E68;
+  --primary-700: #243B53;
+  --primary-800: #1F2D3D;
+  --primary-900: #102A43;
+
+  /* ============================================================
+     COLOR — Semantic
+     ============================================================ */
+  --success:    #047857;
+  --success-bg: #ECFDF5;
+  --warning:    #B45309;
+  --warning-bg: #FFFBEB;
+  --danger:     #B91C1C;
+  --danger-bg:  #FEF2F2;
+  --info:       #1E40AF;
+  --info-bg:    #EFF6FF;
+
+  /* ============================================================
+     COLOR — Neutrals (warm gray, not cold)
+     ============================================================ */
+  --neutral-50:  #FAFAF9;
+  --neutral-100: #F5F5F4;
+  --neutral-200: #E7E5E4;
+  --neutral-300: #D6D3D1;
+  --neutral-400: #A8A29E;
+  --neutral-500: #78716C;
+  --neutral-600: #57534E;
+  --neutral-700: #44403C;
+  --neutral-800: #292524;
+  --neutral-900: #1C1917;
+
+  /* ============================================================
+     TYPOGRAPHY — families
+     ============================================================ */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, monospace;
+  --font-display: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* ============================================================
+     RADII
+     ============================================================ */
+  --radius-sm: 6px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* ============================================================
+     SHADOWS — soft, layered
+     ============================================================ */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08),
+               0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 4px 8px -2px rgba(16, 24, 40, 0.08),
+               0 2px 4px -2px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 12px 16px -4px rgba(16, 24, 40, 0.08),
+               0 4px 6px -2px rgba(16, 24, 40, 0.03);
+  --shadow-xl: 0 20px 24px -4px rgba(16, 24, 40, 0.08),
+               0 8px 8px -4px rgba(16, 24, 40, 0.03);
+  --shadow-focus: 0 0 0 4px rgba(36, 59, 83, 0.12);
+
+  /* ============================================================
+     MOTION — easings + durations (shared with framer-motion presets)
+     ============================================================ */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 180ms;
+  --duration-base: 240ms;
+  --duration-slow: 400ms;
+}

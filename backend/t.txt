@@ -1,0 +1,11 @@
+1 True Weekly budget arithmetic
+2 True Monthly minutes target (4.3 rule)
+3 True Schedule total minutes = MDHHS monthly target
+4 True Schedule dollar total ↔ mdhhs_monthly_amount
+5 False Per-task minutes vs authorization (5a: net to MDHHS total)
+6 True Task occurrence counts vs frequency
+7 True Shift-type invariants
+8 True No day > 8 hours; warn if > 5 hours
+9 True Catch-up day justified (gap before extra errand day)
+10 True Form grand total ≈ calendar mdhhs_monthly_amount (line rounding gap)
+11 True Form line items sum to PDF grand total

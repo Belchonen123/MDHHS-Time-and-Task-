@@ -1,0 +1,13 @@
+{
+  "name": "mdhhs-poc-builder",
+  "scripts": {
+    "export:review": "python scripts/bundle_for_review.py",
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "node scripts/dev-backend.cjs",
+    "dev:frontend": "cd frontend && npm run dev:vite",
+    "install:all": "cd backend && pip install -r requirements.txt && cd ../frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
