@@ -51,6 +51,17 @@ function sourceReviewHref(row: ClientSummary): string | null {
   return downloadFile(row.client_id, p.version, "source")
 }
 
+/** Open client detail — land on Reconciliation when the latest plan needs review (“Review” badge). */
+function clientRowNavigateState(row: ClientSummary): { focusTab: "validation" } | undefined {
+  if (
+    row.latest_plan != null &&
+    !row.latest_plan.validation_passed
+  ) {
+    return { focusTab: "validation" }
+  }
+  return undefined
+}
+
 export function ClientList() {
   const navigate = useNavigate()
   const [rows, setRows] = useState<ClientSummary[] | undefined>(undefined)
@@ -79,9 +90,10 @@ export function ClientList() {
     }
   }, [loadTick])
 
-  const goTo = useCallback(
-    (id: string) => {
-      navigate(`/clients/${encodeURIComponent(id)}`)
+  const openClient = useCallback(
+    (row: ClientSummary) => {
+      const state = clientRowNavigateState(row)
+      navigate(`/clients/${encodeURIComponent(row.client_id)}`, state ? { state } : undefined)
     },
     [navigate],
   )
@@ -105,11 +117,11 @@ export function ClientList() {
   const empty = !loading && rows.length === 0
 
   const handleRowKeyDown = useMemo(
-    () => (e: KeyboardEvent<HTMLTableRowElement>, id: string, index: number) => {
+    () => (e: KeyboardEvent<HTMLTableRowElement>, row: ClientSummary, index: number) => {
       const rowsCount = rows?.length ?? 0
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault()
-        goTo(id)
+        openClient(row)
       } else if (e.key === "ArrowDown") {
         e.preventDefault()
         const next = tableRef.current?.querySelector<HTMLTableRowElement>(
@@ -124,7 +136,7 @@ export function ClientList() {
         prev?.focus()
       }
     },
-    [rows, goTo],
+    [rows, openClient],
   )
 
   return (
@@ -166,8 +178,8 @@ export function ClientList() {
                       "hover:bg-neutral-50",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-700 focus-visible:ring-offset-[-2px]",
                     )}
-                    onClick={() => goTo(r.client_id)}
-                    onKeyDown={(e) => handleRowKeyDown(e, r.client_id, index)}
+                    onClick={() => openClient(r)}
+                    onKeyDown={(e) => handleRowKeyDown(e, r, index)}
                     aria-label={`${r.client_name || r.client_id} — press Enter to open`}
                   >
                     <TableCell
@@ -256,7 +268,10 @@ export function ClientList() {
                           type="button"
                           size="sm"
                           variant="outline"
-                          onClick={() => goTo(r.client_id)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openClient(r)
+                          }}
                         >
                           View
                         </Button>
