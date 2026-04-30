@@ -1,19 +1,8 @@
-import { useMemo } from "react"
-import { format, parseISO } from "date-fns"
 import { motion } from "framer-motion"
 import { CheckCircle2, XCircle } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import {
-  formatHoursMinutes,
-  formatInt,
-  formatMoney,
-} from "@/lib/format"
-import {
-  deliveredMinutesFromPlan,
-  mdhhsFormTotalsFromAuthorizedTasks,
-  scheduledMonthlyMinutesFromPlan,
-} from "@/lib/scheduleBuild"
+import { formatBackendLocal, formatMoney } from "@/lib/format"
 import type { Client, Plan } from "@/types"
 
 interface SummaryPanelProps {
@@ -28,30 +17,6 @@ function sourceFileName(path: string) {
   if (!path) return "—"
   const parts = path.split(/[/\\]/)
   return parts[parts.length - 1] || path
-}
-
-/* ---------- Stats strip ---------- */
-
-function StatCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string
-  value: string
-  detail?: string
-}) {
-  return (
-    <div className="flex-1 rounded-lg border border-neutral-200 bg-white p-5 shadow-xs">
-      <div className="label-caps text-[10px]">{label}</div>
-      <div className="mt-2 font-display text-2xl font-semibold tabular text-neutral-900">
-        {value}
-      </div>
-      {detail && (
-        <div className="mt-1 text-xs text-neutral-500 tabular">{detail}</div>
-      )}
-    </div>
-  )
 }
 
 /* ---------- About this client ---------- */
@@ -174,7 +139,7 @@ function PlanHistory({
                     )}
                   </div>
                   <div className="mt-0.5 text-xs text-neutral-500 tabular">
-                    {format(parseISO(p.created_at), "MMM d, yyyy · h:mm a")}
+                    {formatBackendLocal(p.created_at, "MMM d, yyyy · h:mm a")}
                   </div>
                 </motion.button>
               </li>
@@ -195,82 +160,8 @@ export function SummaryPanel({
   selectedVersion,
   onSelectVersion,
 }: SummaryPanelProps) {
-  const sched = plan.schedule
-  const authRollup = useMemo(
-    () =>
-      mdhhsFormTotalsFromAuthorizedTasks(
-        plan.tasks,
-        Number(client.pay_rate) || 0,
-      ),
-    [plan.tasks, client.pay_rate],
-  )
-  const scheduledTargetMin = useMemo(
-    () => deliveredMinutesFromPlan(plan),
-    [plan],
-  )
-  const authCapMin = useMemo(
-    () => scheduledMonthlyMinutesFromPlan(plan),
-    [plan],
-  )
-  const billableMin =
-    plan.billable_minutes ??
-    (plan.schedule as { billable_minutes?: number } | undefined)
-      ?.billable_minutes ??
-    Math.min(scheduledTargetMin, authCapMin || scheduledTargetMin)
-  const billableUsd =
-    plan.billable_amount ??
-    (plan.schedule as { billable_amount?: number } | undefined)
-      ?.billable_amount
-  const deliveredUsd =
-    plan.delivered_amount ??
-    Number((sched as Record<string, unknown>)?.delivered_amount) ??
-    0
-  const weeklyBudget = plan.weekly_minutes
-
-  // "Monthly auth" = MDHHS-authorized monthly total from per-task monthly_amounts.
-  const authorizedMonthly = plan.tasks.reduce((s, t) => {
-    const v = Number(t.monthly_amount)
-    return Number.isFinite(v) ? s + v : s
-  }, 0)
-
-  const dayCount = Object.keys(sched?.days ?? {}).length
-
   return (
     <div className="flex flex-col gap-6">
-      {/* Stats strip */}
-      <div className="flex gap-4">
-        <StatCard
-          label="Weekly budget"
-          value={formatHoursMinutes(weeklyBudget)}
-          detail={`${formatInt(weeklyBudget)} min`}
-        />
-        <StatCard
-          label="Monthly auth"
-          value={authorizedMonthly > 0 ? formatMoney(authorizedMonthly) : "—"}
-          detail={`${formatHoursMinutes(authRollup.monthlyMinutes)} (${formatInt(authRollup.monthlyMinutes)} min)`}
-        />
-        <StatCard
-          label="Delivered (calendar)"
-          value={deliveredUsd > 0 ? formatMoney(deliveredUsd) : "—"}
-          detail={`${formatHoursMinutes(scheduledTargetMin)} (${formatInt(scheduledTargetMin)} min)`}
-        />
-        <StatCard
-          label="Billable (invoice)"
-          value={
-            billableUsd != null && billableUsd > 0
-              ? formatMoney(billableUsd)
-              : "—"
-          }
-          detail={`${formatHoursMinutes(billableMin)} (${formatInt(billableMin)} min)`}
-        />
-        <StatCard
-          label="Days scheduled"
-          value={`${formatInt(dayCount)} of 7`}
-          detail={`${plan.tasks.filter((t) => (t.task_name || "").trim()).length} tasks`}
-        />
-      </div>
-
-      {/* Two-panel grid */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
         <AboutClient client={client} plan={plan} />
         <PlanHistory

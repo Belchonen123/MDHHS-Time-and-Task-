@@ -162,6 +162,15 @@ def extracted_to_client_fields(ex: ExtractedForm) -> dict[str, Any]:
     }
 
 
+def _ensure_public_client_slug(db: Session, client: Client) -> None:
+    """Persisted slug for URLs when the PDF omits MDHHS client ID (still merges on '')."""
+    if (client.client_id or "").strip():
+        return
+    slug = f"draft_{client.id}"
+    client.client_id = slug
+    db.flush()
+
+
 def upsert_client(db: Session, ex: ExtractedForm) -> Client:
     fields = extracted_to_client_fields(ex)
     cid = fields["client_id"]
@@ -178,10 +187,12 @@ def upsert_client(db: Session, ex: ExtractedForm) -> Client:
         row.auth_date = fields["auth_date"]
         row.updated_at = _now()
         db.flush()
+        _ensure_public_client_slug(db, row)
         return row
     row = Client(**fields, created_at=_now(), updated_at=_now())
     db.add(row)
     db.flush()
+    _ensure_public_client_slug(db, row)
     return row
 
 

@@ -167,7 +167,17 @@ export function ReRunDialog({
       year: month.year,
       month: month.month,
     })
-    toast.success(`New plan v${plan.version} created for the selected month`)
+    const degenerate =
+      plan.tasks.length === 0 ||
+      Object.keys(plan.schedule?.days ?? {}).length === 0 ||
+      plan.monthly_amount === 0
+    if (degenerate) {
+      toast.warning(
+        "Re-run produced an empty plan — check the source PDF or disable Claude suggestions.",
+      )
+    } else {
+      toast.success(`New plan v${plan.version} created for the selected month`)
+    }
     onSuccess(plan)
     onOpenChange(false)
   }

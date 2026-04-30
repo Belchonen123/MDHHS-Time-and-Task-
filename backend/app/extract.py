@@ -890,36 +890,124 @@ def _extract_pay_rate_loose(text: str) -> float:
     return 0.0
 
 
+_MPD_MAX = 1440
+
+
+def _monthly_rounded_column_to_auth_minutes(s: str) -> int | None:
+    """Task-row «Time/Month» H:HH as half-even rounded integers (minutes)."""
+    raw = normalize_duration_hhmm(_normalize_token_hhmm(s))
+    if not raw:
+        return None
+    try:
+        h_s, mm_s = raw.split(":", 1)
+        return int(h_s) * 60 + int(mm_s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _reconcile_min_per_day_from_monthly_column(
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    When OCR puts the wrong token in «Duration», ``min_per_day`` no longer agrees
+    with the printed Monthly Time column (mdhhs line uses half-even mpd × dpw × 4.3).
+
+    Prefer the Monthly Time figures — they OCR more reliably — and overwrite
+    ``min_per_day`` when we find a plausible match. Logs task names patched.
+    """
+    from .calculate import compute_monthly_minutes_rounded
+
+    out: list[dict[str, Any]] = []
+
+    for t in tasks:
+        d = dict(t)
+        nm = str(d.get("task_name") or "").strip()
+        mt_s = _normalize_token_hhmm(str(d.get("monthly_time_str") or "").strip())
+        auth_mm = _monthly_rounded_column_to_auth_minutes(mt_s)
+        if auth_mm is None or auth_mm <= 0:
+            out.append(d)
+            continue
+
+        try:
+            dpw = int(d.get("days_per_week") or 0)
+            mpd_raw = int(d.get("min_per_day") or 0)
+        except (TypeError, ValueError):
+            out.append(d)
+            continue
+        if dpw <= 0 or mpd_raw <= 0:
+            out.append(d)
+            continue
+
+        modeled = compute_monthly_minutes_rounded(mpd_raw, dpw)
+        if modeled == auth_mm:
+            out.append(d)
+            continue
+
+        exact: list[int] = []
+        for cand in range(1, _MPD_MAX + 1):
+            if compute_monthly_minutes_rounded(cand, dpw) == auth_mm:
+                exact.append(cand)
+
+        picked: int | None = None
+        if exact:
+            picked = min(exact, key=lambda c: abs(c - mpd_raw))
+        else:
+            best_c: int | None = None
+            best_diff = 10**9
+            for cand in range(1, _MPD_MAX + 1):
+                cm = compute_monthly_minutes_rounded(cand, dpw)
+                delta = abs(cm - auth_mm)
+                if delta < best_diff:
+                    best_diff = delta
+                    best_c = cand
+            if best_c is not None and best_diff <= 2:
+                picked = best_c
+
+        if picked is not None and picked != mpd_raw and abs(picked - mpd_raw) <= 480:
+            d["min_per_day"] = picked
+            logger.info(
+                "Reconciled %r duration: mpd %d → %d (Monthly Time implies %d min @ %dw/wk)",
+                nm,
+                mpd_raw,
+                picked,
+                auth_mm,
+                dpw,
+            )
+        out.append(d)
+
+    return out
+
+
 def _compute_task_amounts(
     tasks: list[dict[str, Any]], pay_rate: float
 ) -> list[dict[str, Any]]:
     """
     Deterministic belt-and-suspenders for per-task ``monthly_amount``.
 
-    Some PDFs put the $-amount on a different line than the task name, so the
-    single-line task regex captures a bogus (or missing) dollar figure. If the
-    extracted ``monthly_amount`` is zero or clearly wrong (< $1.00) and we have
-    a positive pay rate, recompute from the structural fields — same cents as
-    :func:`compute_task_amount(mpd, dpw, pay_rate)`.
-    Values that already look reasonable are left alone.
+    OCR often mis-assigns dollar columns; Schedule / validation use
+    :func:`~calculate.compute_task_amount` off ``min_per_day`` × ``days_per_week``.
+    When pay rate is known and both structural fields are positive, always derive
+    the line ``$`` from math (half-even cents) so results match authorization totals.
     """
+    from .calculate import compute_task_amount
+
     out: list[dict[str, Any]] = []
     for t in tasks:
         d = dict(t)
         try:
-            amt = float(d.get("monthly_amount") or 0.0)
+            mpd = int(d.get("min_per_day") or 0)
+            dpw = int(d.get("days_per_week") or 0)
         except (TypeError, ValueError):
-            amt = 0.0
-        if amt < 1.0 and pay_rate and pay_rate > 0:
-            try:
-                mpd = int(d.get("min_per_day") or 0)
-                dpw = int(d.get("days_per_week") or 0)
-            except (TypeError, ValueError):
-                mpd, dpw = 0, 0
-            if mpd > 0 and dpw > 0:
-                from .calculate import compute_task_amount
+            mpd, dpw = 0, 0
 
-                d["monthly_amount"] = compute_task_amount(mpd, dpw, pay_rate)
+        if pay_rate and pay_rate > 0 and mpd > 0 and dpw > 0:
+            d["monthly_amount"] = compute_task_amount(mpd, dpw, float(pay_rate))
+        else:
+            try:
+                d["monthly_amount"] = float(d.get("monthly_amount") or 0.0)
+            except (TypeError, ValueError):
+                d["monthly_amount"] = 0.0
+
         out.append(d)
     return out
 
@@ -1145,8 +1233,9 @@ def extract_from_pdf(path: str | Path) -> ExtractedForm:
     f.monthly_total_time_str = mt
     f.monthly_total_amount = float(tot)
 
-    # Belt-and-suspenders: recompute any bad / missing per-task dollar amounts
-    # from structural fields once we've locked in the pay rate.
+    f.tasks = _reconcile_min_per_day_from_monthly_column(f.tasks)
+
+    # Per-line $ from Duration × frequency (OCR $ column is unreliable).
     f.tasks = _compute_task_amounts(f.tasks, f.pay_rate)
     _apply_authoritative_roll_up_from_tasks(f)
 

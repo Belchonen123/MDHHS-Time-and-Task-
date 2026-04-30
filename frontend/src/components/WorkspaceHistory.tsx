@@ -1,9 +1,9 @@
-import { format, parseISO } from "date-fns"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { CheckCircle2, Loader2, XCircle } from "lucide-react"
 
 import { listClients } from "@/api/client"
+import { formatBackendLocal, parseBackendUtcInstant } from "@/lib/format"
 import { Button } from "@/components/ui/button"
 import {
   Table,
@@ -47,8 +47,8 @@ export function WorkspaceHistory() {
       .filter((r) => r.latest_plan != null)
       .sort(
         (a, b) =>
-          parseISO(b.latest_plan!.created_at).getTime() -
-          parseISO(a.latest_plan!.created_at).getTime(),
+          parseBackendUtcInstant(b.latest_plan!.created_at).getTime() -
+          parseBackendUtcInstant(a.latest_plan!.created_at).getTime(),
       )
   }, [rows])
 
@@ -125,7 +125,7 @@ export function WorkspaceHistory() {
                       )}
                     </TableCell>
                     <TableCell className="tabular text-sm text-neutral-600">
-                      {format(parseISO(p.created_at), "MMM d, yyyy · h:mm a")}
+                      {formatBackendLocal(p.created_at, "MMM d, yyyy · h:mm a")}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

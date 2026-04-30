@@ -94,6 +94,11 @@ def merge_llm_config_into_base(
         sd = [str(x) for x in (row.get("selected_dates") or []) if x]
         sw_from_fb = False
 
+        # Take the first dpw weekdays from the model before treating undersupply
+        # as a mismatch fallback (otherwise len(sw)>dpw never reaches truncation).
+        if dpw > 0 and len(sw) > dpw:
+            sw = sw[:dpw]
+
         if dpw > 0 and len(sw) != dpw:
             logger.info(
                 "LLM weekday count mismatch for %s: got %d want %d, using base",
@@ -105,8 +110,6 @@ def merge_llm_config_into_base(
                 sw = list(fb.selected_weekdays)
                 sd = list(fb.selected_dates)
                 sw_from_fb = True
-        elif dpw > 0 and len(sw) > dpw:
-            sw = sw[:dpw]
 
         if sw_from_fb:
             placement_fallback = fb.placement_fallback if fb else False
@@ -126,7 +129,7 @@ def merge_llm_config_into_base(
                 preferred_weekdays=list(sw),
                 preferred_dates=list(sd),
                 placement_overrides=[],
-                preference_unspecified=True,
+                preference_unspecified=sw_from_fb,
             )
         )
 

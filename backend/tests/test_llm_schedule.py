@@ -61,6 +61,8 @@ def test_merge_llm_updates_weekdays_and_times() -> None:
     assert out.tasks[0].selected_weekdays == ["Tuesday", "Thursday", "Saturday"]
     assert out.tasks[0].min_per_day == 30
     assert out.tasks[1].selected_weekdays == ["Monday", "Friday"]
+    assert out.tasks[0].preference_unspecified is False
+    assert out.tasks[1].preference_unspecified is False
     assert out.start_time_by_weekday["Monday"] == "8:00 AM"
     assert out.start_time_by_weekday["Saturday"] == "1:00 PM"
 
@@ -88,3 +90,51 @@ def test_merge_llm_weekday_count_mismatch_falls_back() -> None:
     out = merge_llm_config_into_base(raw, auth, base)
     assert out.tasks[0].selected_weekdays == ["Monday", "Wednesday", "Friday"]
     assert out.tasks[1].selected_weekdays == ["Saturday", "Sunday"]
+    assert out.tasks[0].preference_unspecified is True
+    assert out.tasks[1].preference_unspecified is True
+
+
+def test_merge_llm_kept_weekdays_set_preference_specified_false() -> None:
+    """Explicit LLM weekdays (len == dpw) must mark preference_unspecified False."""
+    base = _base_config()
+    raw = {
+        "tasks": [
+            {
+                "task_name": "Bathing",
+                "selected_weekdays": ["Monday", "Wednesday", "Friday"],
+                "selected_dates": [],
+            },
+        ],
+    }
+    auth = [
+        {"task_name": "Bathing", "min_per_day": 30, "days_per_week": 3},
+        {"task_name": "Grooming", "min_per_day": 15, "days_per_week": 2},
+    ]
+    out = merge_llm_config_into_base(raw, auth, base)
+    assert out.tasks[0].selected_weekdays == ["Monday", "Wednesday", "Friday"]
+    assert out.tasks[0].preference_unspecified is False
+
+
+def test_merge_llm_truncated_extra_weekdays_still_specified_false() -> None:
+    """len(sw) > dpw truncation keeps model intent — not a base fallback."""
+    base = _base_config()
+    raw = {
+        "tasks": [
+            {
+                "task_name": "Bathing",
+                "selected_weekdays": [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                ],
+                "selected_dates": [],
+            },
+        ],
+        "start_time_by_weekday": {},
+    }
+    auth = [{"task_name": "Bathing", "min_per_day": 30, "days_per_week": 3}]
+    out = merge_llm_config_into_base(raw, auth, base)
+    assert len(out.tasks[0].selected_weekdays) == 3
+    assert out.tasks[0].preference_unspecified is False

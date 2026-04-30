@@ -354,7 +354,7 @@ function WeekdayChipButton({
   return inner
 }
 
-export function ScheduleEditor({
+export function PlanScheduleEditor({
   clientId,
   plan,
   onPlanUpdated,
@@ -796,4 +796,4 @@ function SessionsCell({ value, target }: { value: number; target: number }) {
   )
 }
 
-export default ScheduleEditor
+export default PlanScheduleEditor

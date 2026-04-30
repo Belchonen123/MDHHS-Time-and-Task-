@@ -360,11 +360,9 @@ export function UploadHero({
       // Snapshot the picker at submit time so it can't drift mid-upload.
       const submitMonth = month
       const submitAvailability =
-        variant === "hero"
-          ? (availabilityOverride ?? workerAvailability)
-          : undefined
+        availabilityOverride ?? workerAvailability
 
-      if (variant === "hero" && submitAvailability) {
+      if (submitAvailability) {
         const visitWeekdays =
           authorizedTasksForPreflight && authorizedTasksForPreflight.length > 0
             ? visitWeekdaysUnionFromAuthorizedTasks(authorizedTasksForPreflight)
@@ -482,38 +480,62 @@ export function UploadHero({
         return
       }
 
+      const rawCid = String(result.client?.client_id ?? "").trim()
+      const cid =
+        rawCid ||
+        (typeof result.client?.id === "number" && Number.isFinite(result.client.id)
+          ? `draft_${result.client.id}`
+          : "")
+      if (!result.plan || !cid) {
+        setShakeKey((n) => n + 1)
+        toast.error(
+          !result.plan
+            ? "Upload finished but no plan row was returned. Check the API response or reload."
+            : "Upload finished without a usable client identifier. Check whether the PDF includes the MDHHS client ID.",
+        )
+        onUploaded?.(result)
+        setPhase({ kind: "idle" })
+        return
+      }
+
       onUploaded?.(result)
 
       const checks = result.plan.validation?.checks ?? []
       const total = checks.length
       const failed = checks.filter((c) => !c.passed).length
-      const name = result.client.client_name?.trim() || result.client.client_id
-      const clientPath = `/clients/${encodeURIComponent(result.client.client_id)}`
+      const name = result.client.client_name?.trim() || cid
+      const clientPath = `/clients/${encodeURIComponent(cid)}`
 
-      if (result.plan.validation_passed) {
-        // Quick success flash on all four check circles, then fade the card
-        // out and navigate. The AppShell page transition completes the feel.
-        setPhase({ kind: "flash" })
-        toast.success(`Plan generated for ${name}`, {
-          description:
-            total > 0 ? `All ${total} checks passed.` : "Schedule and outputs ready.",
-          duration: 5000,
-        })
-        await sleep(260)
-        // `fromUpload: true` — ClientDetail uses this to fire the one-time
-        // confetti on the reconciliation banner.
-        navigate(clientPath, { state: { fromUpload: true } })
-      } else {
-        setShakeKey((n) => n + 1)
-        toast.warning(`Plan generated with warnings for ${name}`, {
-          description:
-            total > 0
-              ? `${failed} of ${total} checks need review.`
-              : "Some checks need review.",
-          duration: 7000,
-        })
-        // Hint to ClientDetail to focus the Validation tab.
-        navigate(clientPath, { state: { focusTab: "validation" } })
+      try {
+        if (result.plan.validation_passed) {
+          // Quick success flash on all four check circles, then fade the card
+          // out and navigate. The AppShell page transition completes the feel.
+          setPhase({ kind: "flash" })
+          toast.success(`Plan generated for ${name}`, {
+            description:
+              total > 0 ? `All ${total} checks passed.` : "Schedule and outputs ready.",
+            duration: 5000,
+          })
+          await sleep(260)
+          // `fromUpload: true` — ClientDetail uses this to fire the one-time
+          // confetti on the reconciliation banner.
+          navigate(clientPath, { state: { fromUpload: true } })
+        } else {
+          setShakeKey((n) => n + 1)
+          toast.warning(`Plan generated with warnings for ${name}`, {
+            description:
+              total > 0
+                ? `${failed} of ${total} checks need review.`
+                : "Some checks need review.",
+            duration: 7000,
+          })
+          // Hint to ClientDetail to focus the Validation tab.
+          navigate(clientPath, { state: { focusTab: "reconciliation" } })
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        toast.error(`Could not open the client page: ${msg}`)
+        setPhase({ kind: "idle" })
       }
     },
     [
@@ -521,7 +543,6 @@ export function UploadHero({
       month,
       navigate,
       onUploaded,
-      variant,
       workerAvailability,
     ],
   )
@@ -645,53 +666,61 @@ export function UploadHero({
           onChange={onInputChange}
           aria-hidden
         />
-        <motion.div
-          role="button"
-          tabIndex={0}
-          aria-label="Upload MDHHS-6064 PDF"
-          ref={zoneRef}
-          onClick={openPicker}
-          onKeyDown={onKeyDown}
-          onDragEnter={onDragEnter}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          animate={shakeKey ? { x: [-4, 4, -2, 2, 0] } : { x: 0 }}
-          transition={{ duration: 0.4, ease: easeOutSoft }}
-          className={cn(
-            "group flex h-[100px] w-full cursor-pointer items-center justify-between rounded-xl border-2 px-6 transition-[border-color,background-color,box-shadow] duration-[160ms] ease-out",
-            cardClasses,
-          )}
-        >
-          <div className="flex items-center gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-700">
-              <FileUp className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-neutral-900">
-                Upload another MDHHS-6064
-              </div>
-              <div className="text-xs text-neutral-600">
-                PDF only • never leaves this computer
-              </div>
-            </div>
-          </div>
-          <div
-            className="flex items-center gap-2"
-            onClick={(e) => e.stopPropagation()}
+        <div className="flex flex-col gap-4">
+          <WorkerAvailabilitySection
+            ref={availabilitySectionRef}
+            value={workerAvailability}
+            onChange={setWorkerAvailability}
+            disabled={busy}
+          />
+          <motion.div
+            role="button"
+            tabIndex={0}
+            aria-label="Upload MDHHS-6064 PDF"
+            ref={zoneRef}
+            onClick={openPicker}
+            onKeyDown={onKeyDown}
+            onDragEnter={onDragEnter}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            animate={shakeKey ? { x: [-4, 4, -2, 2, 0] } : { x: 0 }}
+            transition={{ duration: 0.4, ease: easeOutSoft }}
+            className={cn(
+              "group flex h-[100px] w-full cursor-pointer items-center justify-between rounded-xl border-2 px-6 transition-[border-color,background-color,box-shadow] duration-[160ms] ease-out",
+              cardClasses,
+            )}
           >
-            <MonthYearPicker value={month} onChange={setMonth} disabled={busy} />
-            <Button
-              type="button"
-              size="default"
-              onClick={openPicker}
-              className="gap-2"
+            <div className="flex items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-700">
+                <FileUp className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-neutral-900">
+                  Upload another MDHHS-6064
+                </div>
+                <div className="text-xs text-neutral-600">
+                  PDF only • never leaves this computer
+                </div>
+              </div>
+            </div>
+            <div
+              className="flex items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
             >
-              <Upload className="h-4 w-4" />
-              Choose file
-            </Button>
-          </div>
-        </motion.div>
+              <MonthYearPicker value={month} onChange={setMonth} disabled={busy} />
+              <Button
+                type="button"
+                size="default"
+                onClick={openPicker}
+                className="gap-2"
+              >
+                <Upload className="h-4 w-4" />
+                Choose file
+              </Button>
+            </div>
+          </motion.div>
+        </div>
       </>
     )
   }
@@ -702,8 +731,9 @@ export function UploadHero({
 
   return (
     <div className="mb-8">
-      {variant === "hero" &&
-        (phase.kind === "idle" || phase.kind === "parseError") && (
+      {((variant === "hero" &&
+        (phase.kind === "idle" || phase.kind === "parseError")) ||
+        (variant === "compact" && phase.kind === "parseError")) && (
           <WorkerAvailabilitySection
             ref={availabilitySectionRef}
             value={workerAvailability}
@@ -853,24 +883,16 @@ export function UploadHero({
                         <DayCapacityErrorPanel
                           detail={phase.dayCapacity}
                           availability={workerAvailability}
-                          onApplyAvailability={
-                            variant === "hero"
-                              ? async (next) => {
-                                  setWorkerAvailability(next)
-                                  const f = lastFileRef.current
-                                  if (f) await runUpload(f, next)
-                                }
-                              : undefined
-                          }
+                          onApplyAvailability={async (next) => {
+                            setWorkerAvailability(next)
+                            const f = lastFileRef.current
+                            if (f) await runUpload(f, next)
+                          }}
                           onEditAuthorization={() => {
-                            if (variant === "hero") {
-                              availabilitySectionRef.current?.scrollIntoView({
-                                behavior: "smooth",
-                                block: "center",
-                              })
-                            } else {
-                              window.dispatchEvent(new CustomEvent("app:focus-upload"))
-                            }
+                            availabilitySectionRef.current?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            })
                           }}
                         />
                       </div>

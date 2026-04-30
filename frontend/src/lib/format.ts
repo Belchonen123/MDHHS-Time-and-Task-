@@ -5,6 +5,46 @@
  * the stats strip, the reconciliation table, and the downloads page.
  */
 
+import { format, parseISO } from "date-fns"
+
+/** True if ISO string ends with UTC `Z` or a numeric offset (+00:00, -0530). */
+export function isoHasExplicitOffset(iso: string): boolean {
+  const s = iso.trim()
+  if (!s) return false
+  return /(?:Z|[+-]\d{2}:\d{2})$|(?:[+-]\d{4})$/.test(s)
+}
+
+/**
+ * FastAPI/SQLAlchemy often emits UTC instants without `Z`; `parseISO` would treat those
+ * as local wall time. Normalize to UTC so `format(...)` respects the user's timezone.
+ */
+export function parseBackendUtcInstant(raw: string): Date {
+  const s = raw.trim()
+  if (!s) return new Date(NaN)
+  if (isoHasExplicitOffset(s)) {
+    const d = parseISO(s)
+    return Number.isNaN(d.getTime()) ? new Date(NaN) : d
+  }
+  const withUtc = /\d[Tt]\d/.test(s) ? `${s}Z` : s
+  const d = parseISO(withUtc)
+  return Number.isNaN(d.getTime()) ? new Date(NaN) : d
+}
+
+/** Display backend timestamps in the browser's local timezone. */
+export function formatBackendLocal(
+  raw: string | null | undefined,
+  fmt: string = "MMM d, yyyy h:mm a",
+): string {
+  if (raw == null || String(raw).trim() === "") return "—"
+  try {
+    const d = parseBackendUtcInstant(String(raw))
+    if (Number.isNaN(d.getTime())) return "—"
+    return format(d, fmt)
+  } catch {
+    return "—"
+  }
+}
+
 const moneyFmt = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",

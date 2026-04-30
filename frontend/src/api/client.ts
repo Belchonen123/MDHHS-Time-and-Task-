@@ -267,13 +267,27 @@ export async function uploadPDF(
   return (await res.json()) as UploadResult
 }
 
+/** Defensive: same `client_id` should not appear twice; keeps UI stable if callers double-fetch. */
+function dedupeClientsById(rows: ClientSummary[]): ClientSummary[] {
+  const seen = new Set<string>()
+  const out: ClientSummary[] = []
+  for (const r of rows) {
+    const id = String(r.client_id ?? "").trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(r)
+  }
+  return out
+}
+
 /**
  * GET /api/clients
  */
 export async function listClients(): Promise<ClientSummary[]> {
   const res = await fetch(apiUrl("/api/clients"))
   await throwIfResNotOk(res)
-  return (await res.json()) as ClientSummary[]
+  const rows = (await res.json()) as ClientSummary[]
+  return dedupeClientsById(rows)
 }
 
 /**

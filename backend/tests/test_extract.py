@@ -155,6 +155,23 @@ def test_group_n_not_name() -> None:
     assert parsed["monthly_amount"] == pytest.approx(216.72, abs=0.01)
 
 
+def test_reconcile_mpd_from_monthly_time_column() -> None:
+    """When Duration OCR is wrong, infer minutes/day from printed Monthly Time HH:MM."""
+    from app.extract import _reconcile_min_per_day_from_monthly_column
+
+    wrong = [
+        {
+            "task_name": "Bathing",
+            "min_per_day": 10,
+            "days_per_week": 7,
+            "monthly_time_str": "8:02",
+            "monthly_amount": 0.0,
+        },
+    ]
+    fixed = _reconcile_min_per_day_from_monthly_column(wrong)
+    assert fixed[0]["min_per_day"] == 16
+
+
 def test_compute_task_amounts_fills_missing() -> None:
     """Belt-and-suspenders: sub-$1 / missing amounts recomputed like the form."""
     # Expected line $ uses unrounded mpd × dpw × 4.3 × pay / 60 (cents HALF_EVEN).
@@ -174,15 +191,20 @@ def test_compute_task_amounts_fills_missing() -> None:
     assert dressing["monthly_amount"] == pytest.approx(
         compute_task_amount(10, 7, 27.0), abs=0.01
     )
-    assert mobility["monthly_amount"] == 99.99
+    assert mobility["monthly_amount"] == pytest.approx(
+        compute_task_amount(5, 7, 27.0), abs=0.01,
+    )
 
 
-def test_compute_task_amounts_leaves_reasonable_values_alone() -> None:
+def test_compute_task_amounts_matches_form_formula() -> None:
+    """Printed $ equals half-even(Duration × freq × pay) — OCR $ is overwritten."""
     tasks = [
         {"task_name": "Bathing", "min_per_day": 16, "days_per_week": 7, "monthly_amount": 216.72},
     ]
     result = _compute_task_amounts(tasks, pay_rate=27.00)
-    assert result[0]["monthly_amount"] == 216.72
+    assert result[0]["monthly_amount"] == pytest.approx(
+        compute_task_amount(16, 7, 27.0), abs=0.01,
+    )
 
 
 def test_eating_feeding_line_extracts() -> None:

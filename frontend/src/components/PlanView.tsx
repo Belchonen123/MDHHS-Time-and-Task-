@@ -9,7 +9,7 @@ import { WeeklyPatternPanel } from "@/components/plan/WeeklyPatternPanel"
 import { DailySchedulePanel } from "@/components/plan/DailySchedulePanel"
 import { ReconciliationPanel } from "@/components/plan/ReconciliationPanel"
 import { DownloadsPanel } from "@/components/plan/DownloadsPanel"
-import { ScheduleEditor } from "@/components/plan/ScheduleEditor"
+import { PlanScheduleEditor } from "@/components/plan/PlanScheduleEditor"
 import {
   DOWNLOAD_NETWORK_TOAST_DESCRIPTION,
   downloadBlobFromUrl,
@@ -24,16 +24,16 @@ export type PlanTabId =
   | "schedule"
   | "weekly"
   | "daily"
-  | "validation"
+  | "reconciliation"
   | "downloads"
 
 const TABS: readonly PlanTabDef<PlanTabId>[] = [
-  { id: "summary", label: "Summary" },
   { id: "schedule", label: "Schedule" },
   { id: "weekly", label: "Weekly Pattern" },
   { id: "daily", label: "Daily Schedule" },
-  { id: "validation", label: "Reconciliation" },
+  { id: "reconciliation", label: "Reconciliation" },
   { id: "downloads", label: "Downloads" },
+  { id: "summary", label: "Summary" },
 ]
 
 interface PlanViewProps {
@@ -46,7 +46,7 @@ interface PlanViewProps {
   onSelectVersion: (version: number) => void
   /** Called when the user edits the ScheduleConfig — parent refreshes data. */
   onPlanUpdated?: (plan: Plan) => void
-  /** Optional tab to land on (e.g. `validation` when upload had warnings). */
+  /** Optional tab to land on (e.g. `reconciliation` when upload had warnings). */
   initialTab?: PlanTabId
   /** Fire the confetti burst once (set when navigating from the upload flow). */
   celebrate?: boolean
@@ -62,7 +62,7 @@ export function PlanView({
   initialTab,
   celebrate,
 }: PlanViewProps) {
-  const [tab, setTab] = useState<PlanTabId>(initialTab ?? "summary")
+  const [tab, setTab] = useState<PlanTabId>(initialTab ?? "schedule")
 
   const weekdayPreferredMinutes = useMemo(() => {
     const map = normalizeWorkerAvailability(
@@ -141,7 +141,7 @@ export function PlanView({
               )
             case "schedule":
               return (
-                <ScheduleEditor
+                <PlanScheduleEditor
                   clientId={clientId}
                   plan={plan}
                   onPlanUpdated={(p) => onPlanUpdated?.(p)}
@@ -157,7 +157,7 @@ export function PlanView({
               )
             case "daily":
               return <DailySchedulePanel plan={plan} client={client} />
-            case "validation":
+            case "reconciliation":
               return <ReconciliationPanel plan={plan} />
             case "downloads":
               return <DownloadsPanel plan={plan} clientId={clientId} />

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
-import { addDays, format, parseISO, startOfWeek } from "date-fns"
+import { addDays, format, startOfWeek } from "date-fns"
 import { ChevronDown, Clock, Sparkles } from "lucide-react"
 
 import {
@@ -21,6 +21,7 @@ import {
   formatHoursMinutes,
   formatInt,
   formatMoney,
+  parseBackendUtcInstant,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { easeOutSoft } from "@/lib/motion"
@@ -287,7 +288,9 @@ function DailyRow({
 export function DailySchedulePanel({ plan }: DailySchedulePanelProps) {
   // Anchor day 1 to the Monday on/before the first of the plan-creation month.
   const referenceStart = useMemo(() => {
-    const created = plan.created_at ? parseISO(plan.created_at) : new Date()
+    const created = plan.created_at
+      ? parseBackendUtcInstant(plan.created_at)
+      : new Date()
     const firstOfMonth = new Date(
       created.getFullYear(),
       created.getMonth(),

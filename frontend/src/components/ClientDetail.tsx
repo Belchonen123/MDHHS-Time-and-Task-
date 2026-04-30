@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { type ComponentProps, useCallback, useEffect, useId, useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
-import { Loader2, RefreshCw, Trash2, User } from "lucide-react"
+import { ChevronDown, Loader2, RefreshCw, Trash2, User } from "lucide-react"
 import { toast } from "sonner"
 
 import { deleteClient, getClient } from "@/api/client"
@@ -22,9 +22,62 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatMoney } from "@/lib/format"
 import type { WorkerAvailabilityMap } from "@/lib/workerAvailability"
 import type { Client, ClientDetail as ClientDetailT, Plan } from "@/types"
+import { cn } from "@/lib/utils"
+
+/** True when the API returned a persisted per-weekday availability map (any keys). */
+function clientHasStoredAvailability(client: Client): boolean {
+  const a = client.availability
+  return Boolean(a && typeof a === "object" && Object.keys(a).length > 0)
+}
+
+type ClientAvailabilityPanelProps = ComponentProps<typeof ClientAvailabilityPanel>
+
+/** Card + disclosure trigger around {@link ClientAvailabilityPanel} — remount with `client_id` key for correct default openness. */
+function ClientAvailabilityFold(props: ClientAvailabilityPanelProps) {
+  const collapsedByDefault = clientHasStoredAvailability(props.client)
+  const [open, setOpen] = useState(() => !collapsedByDefault)
+  const panelBodyId = useId()
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 py-4">
+        <CardTitle className="text-base font-semibold leading-tight text-neutral-900">
+          Worker availability
+        </CardTitle>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-2"
+          aria-expanded={open}
+          aria-controls={panelBodyId}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide" : "Show"}
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 transition-transform duration-200",
+              open ? "rotate-180" : "rotate-0",
+            )}
+            aria-hidden
+          />
+        </Button>
+      </CardHeader>
+      {open ? (
+        <CardContent
+          id={panelBodyId}
+          className="border-t pb-6 pt-0 [&>div]:mb-0"
+        >
+          <ClientAvailabilityPanel {...props} />
+        </CardContent>
+      ) : null}
+    </Card>
+  )
+}
 
 function isPlanTab(v: unknown): v is PlanTabId {
   return (
@@ -32,7 +85,7 @@ function isPlanTab(v: unknown): v is PlanTabId {
     v === "schedule" ||
     v === "weekly" ||
     v === "daily" ||
-    v === "validation" ||
+    v === "reconciliation" ||
     v === "downloads"
   )
 }
@@ -58,7 +111,7 @@ export function ClientDetail() {
   const [deleting, setDeleting] = useState(false)
 
   // Initial tab hint from navigation state — upload flow sets
-  // `{ focusTab: "validation" }` when validation had warnings.
+  // `{ focusTab: "reconciliation" }` when validation had warnings.
   const initialTabHint = useMemo<PlanTabId | undefined>(() => {
     const maybe = (location.state as { focusTab?: unknown } | null)?.focusTab
     return isPlanTab(maybe) ? maybe : undefined
@@ -136,12 +189,37 @@ export function ClientDetail() {
     : null
   useBreadcrumbLabel(clientPath, data?.client?.client_name || null)
 
-  const handleRerunSuccess = (plan: Plan) => {
-    void getClient(decodedId).then((d) => {
-      setData(d)
+  const handleRerunSuccess = useCallback(
+    (plan: Plan) => {
+      // Apply the new plan immediately so tabs/downloads update even if refetch fails.
+      setData((prev) => {
+        if (!prev) return prev
+        const others = prev.plans.filter((p) => p.version !== plan.version)
+        return {
+          ...prev,
+          plans: [...others, plan].sort((a, b) => a.version - b.version),
+        }
+      })
       setSelectedVersion(plan.version)
-    })
-  }
+      void getClient(decodedId)
+        .then((d) => {
+          const byVersion = new Map(d.plans.map((p) => [p.version, p]))
+          // Rerun response is authoritative for the new row; GET can occasionally lag.
+          byVersion.set(plan.version, plan)
+          setData({
+            ...d,
+            plans: [...byVersion.values()].sort((a, b) => a.version - b.version),
+          })
+          setSelectedVersion(plan.version)
+        })
+        .catch(() => {
+          toast.error(
+            "New plan was saved, but refreshing the page failed. Reload if totals or downloads look stale.",
+          )
+        })
+    },
+    [decodedId],
+  )
 
   const confirmDelete = async () => {
     if (!decodedId) return
@@ -242,7 +320,8 @@ export function ClientDetail() {
         }
       />
 
-      <ClientAvailabilityPanel
+      <ClientAvailabilityFold
+        key={c.client_id}
         client={c}
         planVersion={selectedPlan?.version ?? null}
         latestPlanVersion={latestPlanVersion}
