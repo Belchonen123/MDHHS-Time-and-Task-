@@ -56,11 +56,14 @@ and ``ScheduleConfig`` only.
 from __future__ import annotations
 
 import calendar
+import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from typing import Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 # Display-only: which canonical MDHHS lines populate ``laundry_days`` /
 # ``shopping_days`` / ``travel_days`` metadata (placement is never inferred
@@ -70,6 +73,21 @@ DISPLAY_TRAVEL_TASK_NAMES: frozenset[str] = frozenset(
 )
 DISPLAY_SHOPPING_TASK_NAMES: frozenset[str] = frozenset({"Shopping for Food/Meds"})
 DISPLAY_LAUNDRY_TASK_NAMES: frozenset[str] = frozenset({"Laundry"})
+
+# Tasks that the cap-aligned trim never reduces. 1/wk tasks already
+# fall 4× per month (under-delivered vs 4.3-week auth), so trimming
+# them would distort per-task delivered counts. Only 7/wk tasks
+# absorb the calendar-overshoot variance.
+NEVER_TRIM_TASK_NAMES: frozenset[str] = (
+    DISPLAY_SHOPPING_TASK_NAMES
+    | DISPLAY_LAUNDRY_TASK_NAMES
+    | DISPLAY_TRAVEL_TASK_NAMES
+)
+
+# Floor: a task's per-day minutes are never reduced below this fraction
+# of its current value. Keeps each trim within natural visit-duration
+# variance and prevents the policy from gutting any task to zero.
+TRIM_TASK_MIN_FRACTION: float = 0.5
 
 # Companion-task pairing: each key runs only on calendar days that also host its parent.
 COMPANION_TO_PARENT: dict[str, str] = {
@@ -1660,6 +1678,7 @@ class CalibratedSchedule:
     daily_schedule: list[DayEntry] = field(default_factory=list)
     weekly_pattern: dict[str, Any] = field(default_factory=dict)
     cumulative_by_day: list[tuple[date, int, int, str]] = field(default_factory=list)
+    schedule_trim_log: list[dict[str, Any]] = field(default_factory=list)
     config: Optional["ScheduleConfig"] = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -1721,6 +1740,7 @@ def schedule_to_dict(cs: CalibratedSchedule) -> dict[str, Any]:
         # can round-trip it verbatim (tasks, selected_weekdays,
         # selected_dates, start_time_by_weekday all preserved).
         "config": cs.config.to_dict() if cs.config is not None else {},
+        "schedule_trim_log": list(cs.schedule_trim_log or []),
     }
     return d
 
@@ -1728,6 +1748,94 @@ def schedule_to_dict(cs: CalibratedSchedule) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Mechanical scheduler — honors ScheduleConfig placement.
 # ---------------------------------------------------------------------------
+def _trim_schedule_to_authorized(
+    daily_schedule: list[DayEntry],
+    authorized_minutes: int,
+    *,
+    worker_availability: dict[str, dict[str, Any]] | None,
+    trim_exempt_names: frozenset[str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Trim minutes off the last week of the month until delivered = auth.
+
+    Walks daily_schedule in REVERSE date order (so the last calendar
+    week absorbs the variance) and on each day reduces the largest
+    non-1/wk task until either the gap is closed OR that task hits
+    its 50% floor. Updates duration_min and clock_out for each
+    touched day. clock_in is never changed.
+
+    Returns (trim_log, residual_overshoot):
+        trim_log — one entry per touched day with date, task,
+                   minutes_shaved, new_task_min, new_duration_min.
+        residual_overshoot — 0 when fully closed; positive when
+                   constraints prevented a full close (caller logs
+                   a warning and lets the existing billable cap
+                   handle the remainder).
+    """
+    delivered = sum(int(d.duration_min) for d in daily_schedule)
+    gap = delivered - int(authorized_minutes)
+    if gap <= 0:
+        return ([], 0)
+
+    trim_log: list[dict[str, Any]] = []
+    if not daily_schedule:
+        return (trim_log, gap)
+    # Only the last calendar week (final 7 days of the month) absorbs trim —
+    # matches MSA invoicing expectation for end-of-month variance.
+    last_dt = daily_schedule[-1].date
+    cutoff = last_dt - timedelta(days=6)
+    # daily_schedule is date-sorted ascending; iterate reversed for
+    # last-week-first absorption.
+    for day in reversed(daily_schedule):
+        if gap <= 0:
+            break
+        if day.date < cutoff:
+            break
+        while gap > 0:
+            eligible = sorted(
+                (
+                    (name, int(mins))
+                    for name, mins in day.tasks.items()
+                    if name not in trim_exempt_names and int(mins) > 0
+                ),
+                key=lambda kv: -kv[1],
+            )
+            if not eligible:
+                break
+            target_name, current_min = eligible[0]
+            floor = max(1, int(current_min * TRIM_TASK_MIN_FRACTION))
+            absorbable = current_min - floor
+            if absorbable <= 0:
+                break
+            shave = min(absorbable, gap)
+            new_task_min = current_min - shave
+            day.tasks[target_name] = new_task_min
+            day.duration_min = int(day.duration_min) - shave
+            # Recompute clock_out — preserves clock_in
+            if worker_availability:
+                _apply_worker_availability_to_entry(
+                    day,
+                    _full_dow_name(day.date),
+                    worker_availability,
+                )
+            else:
+                start_min = _parse_ampm(day.clock_in)
+                day.clock_out = _format_ampm(
+                    _add_minutes(start_min, day.duration_min)
+                )
+            trim_log.append(
+                {
+                    "date": day.date.isoformat(),
+                    "task": target_name,
+                    "minutes_shaved": shave,
+                    "new_task_min": new_task_min,
+                    "new_duration_min": day.duration_min,
+                }
+            )
+            gap -= shave
+
+    return (trim_log, gap)
+
+
 def _derive_shift_type(
     task_names: set[str],
     daily_names: set[str],
@@ -1762,6 +1870,7 @@ def generate_schedule(
     config: ScheduleConfig | dict[str, Any] | None = None,
     *,
     worker_availability: dict[str, dict[str, Any]] | None = None,
+    trim_to_authorized: bool = True,
 ) -> CalibratedSchedule:
     """Build a month of daily visits from a ``ScheduleConfig``.
 
@@ -1893,6 +2002,28 @@ def generate_schedule(
         daily_schedule, dates, worker_availability, cap_for_log
     )
 
+    one_wk_names = frozenset(
+        str(t["task_name"])
+        for t in tasks
+        if int(t.get("days_per_week", 0) or 0) == 1
+    )
+    trim_exempt = NEVER_TRIM_TASK_NAMES | one_wk_names
+
+    schedule_trim_log: list[dict[str, Any]] = []
+    if trim_to_authorized:
+        schedule_trim_log, _residual_overshoot = _trim_schedule_to_authorized(
+            daily_schedule,
+            int(mdhhs_monthly_minutes),
+            worker_availability=worker_availability,
+            trim_exempt_names=trim_exempt,
+        )
+        if _residual_overshoot > 0:
+            logger.warning(
+                "Cap-aligned trim could not fully close gap: "
+                f"{_residual_overshoot} min remain over authorized "
+                f"({mdhhs_monthly_minutes}). Billable layer will cap."
+            )
+
     # Date lists for workbook metadata: ``hw_days`` = any 3/wk-authorized task;
     # laundry / shopping / travel = dates that host those **canonical** MDHHS
     # line items (not every generic 2/wk task — see ``DISPLAY_*_TASK_NAMES``).
@@ -1993,5 +2124,6 @@ def generate_schedule(
         daily_schedule=daily_schedule,
         weekly_pattern=weekly_pattern,
         cumulative_by_day=cum,
+        schedule_trim_log=schedule_trim_log,
         config=cfg,
     )

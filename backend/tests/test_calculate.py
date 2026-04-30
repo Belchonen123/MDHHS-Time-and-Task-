@@ -104,22 +104,22 @@ def test_compute_billable_minutes_returns_delivered_when_under_cap() -> None:
     assert compute_billable_minutes(2480, 2666) == 2480
 
 
-def test_avery_may_2026_overshoots_and_caps_at_2666() -> None:
+def test_avery_may_2026_trims_to_authorized_exact() -> None:
     tasks = _avery_tasks()
     assert compute_mdhhs_form_minutes(tasks) == 2666
     assert compute_mdhhs_form_amount(tasks, 27.0) == pytest.approx(1199.70)
     cs = generate_schedule(tasks, 27.0, 2026, 5, config=None)
     assert cs.mdhhs_monthly_minutes == 2666
-    assert cs.delivered_minutes == 2792
+    assert cs.delivered_minutes == 2666
     assert cs.billable_minutes == 2666
     assert cs.billable_amount == pytest.approx(1199.70)
 
 
-def test_avery_may_2025_calendar_cap_acceptance() -> None:
-    """May 2025 (not May 2026) matches 2711 delivered / 2666 cap for this fixture shape."""
+def test_avery_may_2025_trims_to_auth_last_week() -> None:
+    """May 2025: cap-aligned trim absorbs natural calendar overshoot."""
     tasks = _avery_tasks()
     cs = generate_schedule(tasks, 27.0, 2025, 5, config=None)
-    assert cs.delivered_minutes == 2711
+    assert cs.delivered_minutes == 2666
     assert cs.mdhhs_monthly_minutes == 2666
     assert cs.billable_minutes == 2666
     assert cs.billable_amount == pytest.approx(1199.70)
@@ -131,10 +131,12 @@ def test_avery_may_2025_calendar_cap_acceptance() -> None:
         "2025-05-18",
         "2025-05-25",
     ]
-    assert by[date(2025, 5, 31)].duration_min == 77
+    # Last calendar week is trimmed; same DoW before that week stays at natural minutes.
+    may24, may31 = by[date(2025, 5, 24)], by[date(2025, 5, 31)]
+    assert may31.duration_min < may24.duration_min
 
 
-def test_avery_validation_may_2025_at_cap() -> None:
+def test_avery_validation_may_2025_billable_exact() -> None:
     from app.extract import ExtractedForm
     from app.validate import cross_check
 
@@ -157,7 +159,53 @@ def test_avery_validation_may_2025_at_cap() -> None:
     sd = generate_schedule(tasks, pay, 2025, 5, None).as_dict()
     r = cross_check(form, sd)
     assert r.all_passed
-    assert r.validation_status == "BILLABLE_AT_CAP"
+    assert r.validation_status == "BILLABLE_EXACT"
+
+
+def test_generate_schedule_trims_to_authorized_in_31_day_month() -> None:
+    """Avery May 2026 fixture: with default trim, delivered = auth exactly."""
+    tasks = [
+        {"task_name": "Bathing", "min_per_day": 16, "days_per_week": 7},
+        {"task_name": "Dressing", "min_per_day": 14, "days_per_week": 7},
+        {"task_name": "Grooming", "min_per_day": 8, "days_per_week": 7},
+        {"task_name": "Transferring", "min_per_day": 6, "days_per_week": 7},
+        {"task_name": "Housework", "min_per_day": 6, "days_per_week": 7},
+        {"task_name": "Laundry", "min_per_day": 14, "days_per_week": 1},
+        {"task_name": "Travel For Laundry", "min_per_day": 12, "days_per_week": 1},
+        {"task_name": "Medication", "min_per_day": 2, "days_per_week": 7},
+        {"task_name": "Meal Preparation", "min_per_day": 25, "days_per_week": 7},
+        {"task_name": "Shopping for Food/Meds", "min_per_day": 35, "days_per_week": 1},
+        {"task_name": "Travel For Shopping", "min_per_day": 20, "days_per_week": 1},
+    ]
+    sched = generate_schedule(tasks, 27.0, 2026, 5)
+    delivered = sum(d.duration_min for d in sched.daily_schedule)
+    assert delivered == sched.mdhhs_monthly_minutes, (
+        f"Trim should bring delivered to auth: got {delivered}, "
+        f"expected {sched.mdhhs_monthly_minutes}"
+    )
+    for entry in sched.schedule_trim_log:
+        day_num = int(entry["date"][-2:])
+        assert day_num >= 25, f"Trim escaped last week: {entry}"
+    forbidden = {
+        "Shopping for Food/Meds",
+        "Travel For Shopping",
+        "Laundry",
+        "Travel For Laundry",
+    }
+    for entry in sched.schedule_trim_log:
+        assert entry["task"] not in forbidden, f"Trim hit forbidden task: {entry}"
+
+
+def test_generate_schedule_natural_when_trim_disabled() -> None:
+    """trim_to_authorized=False reproduces the prior overshoot behavior."""
+    tasks = [
+        {"task_name": "Bathing", "min_per_day": 16, "days_per_week": 7},
+        {"task_name": "Meal Preparation", "min_per_day": 25, "days_per_week": 7},
+    ]
+    sched = generate_schedule(tasks, 27.0, 2026, 5, trim_to_authorized=False)
+    delivered = sum(d.duration_min for d in sched.daily_schedule)
+    assert delivered > sched.mdhhs_monthly_minutes
+    assert sched.schedule_trim_log == []
 
 
 # ---------------------------------------------------------------------------
