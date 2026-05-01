@@ -93,6 +93,20 @@ def _avery_tasks() -> list[dict[str, Any]]:
     return tasks
 
 
+def _april_martin_tasks() -> list[dict[str, Any]]:
+    return [
+        {"task_name": "Bathing", "min_per_day": 10, "days_per_week": 7},
+        {"task_name": "Dressing", "min_per_day": 14, "days_per_week": 7},
+        {"task_name": "Grooming", "min_per_day": 8, "days_per_week": 7},
+        {"task_name": "Transferring", "min_per_day": 6, "days_per_week": 4},
+        {"task_name": "Housework", "min_per_day": 10, "days_per_week": 4},
+        {"task_name": "Laundry", "min_per_day": 48, "days_per_week": 1},
+        {"task_name": "Meal Preparation", "min_per_day": 25, "days_per_week": 7},
+        {"task_name": "Shopping for Food/Meds", "min_per_day": 34, "days_per_week": 1},
+        {"task_name": "Travel For Shopping", "min_per_day": 20, "days_per_week": 1},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Billable layer (delivered vs authorized cap).
 # ---------------------------------------------------------------------------
@@ -113,6 +127,26 @@ def test_avery_may_2026_trims_to_authorized_exact() -> None:
     assert cs.delivered_minutes == 2666
     assert cs.billable_minutes == 2666
     assert cs.billable_amount == pytest.approx(1199.70)
+
+
+def test_april_martin_april_2026_default_config_matches_auth_total() -> None:
+    """Phone-scan upload: default catch-up rows close the 40-minute April gap."""
+    tasks = _april_martin_tasks()
+    assert compute_mdhhs_form_minutes(tasks) == 2430
+    assert compute_mdhhs_form_amount(tasks, 27.0) == pytest.approx(1093.28)
+
+    cs = generate_schedule(
+        tasks,
+        27.0,
+        2026,
+        4,
+        worker_availability=default_worker_availability(),
+    )
+
+    assert cs.mdhhs_monthly_minutes == 2430
+    assert cs.delivered_minutes == 2430
+    assert cs.billable_minutes == 2430
+    assert cs.billable_amount == pytest.approx(1093.28)
 
 
 def test_avery_may_2025_trims_to_auth_last_week() -> None:
@@ -1139,4 +1173,3 @@ def test_greedy_trim_overshoot_smallest_first() -> None:
 
 def test_trim_propagates_to_travel_companion() -> None:
     pytest.skip("Greedy trim pipeline not wired in POC")
-

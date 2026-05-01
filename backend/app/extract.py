@@ -64,12 +64,15 @@ TASK_ALIASES: dict[str, str] = {
     "Meal Preparation and Cleanup": "Meal Preparation",
     "Meal Prep": "Meal Preparation",
     "Shopping for Food and Medication": "Shopping for Food/Meds",
+    "Shopping for Food Meds": "Shopping for Food/Meds",
+    "Shopping for FoodiMeds": "Shopping for Food/Meds",
     "Shopping/Errands": "Shopping for Food/Meds",
     # OCR / narrow columns often truncate the label to one word ("Shopping …").
     "Shopping": "Shopping for Food/Meds",
     "Light Housework": "Housework",
     "Travel for Shopping": "Travel For Shopping",
     "Travel for Laundry": "Travel For Laundry",
+    "Transfeming": "Transferring",
     "Catheter": "Catheter Care",
     "Catheters or Leg Bags": "Catheter Care",
     "Colostomy": "Colostomy Care",
@@ -182,6 +185,9 @@ def parse_dollars(s: str) -> float | None:
     if not s or not str(s).strip():
         return None
     t = re.sub(r"[^\d.\-]", "", str(s).replace(",", ""))
+    if t.count(".") > 1:
+        head, tail = t.rsplit(".", 1)
+        t = re.sub(r"\.", "", head) + "." + tail
     if not t or t in "-.":
         return None
     try:
@@ -350,6 +356,13 @@ def _extract_loose_email(text: str) -> str:
     if m:
         return m.group(1).strip()
     m = re.search(
+        r"\b([A-Z0-9._%+\-]+@[A-Z0-9.\-]+)\s+(gov|com|org|net|edu)\b",
+        text,
+        re.I,
+    )
+    if m:
+        return f"{m.group(1).strip()}.{m.group(2).strip()}"
+    m = re.search(
         r"\b([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63})\b",
         text,
         re.I,
@@ -399,6 +412,18 @@ _TASK_LOOSE_RE = re.compile(
     re.I,
 )
 
+# pdfplumber sometimes preserves table column order: Task | Days | Time/Day | …
+# so the joined row reads ``Bathing 7 days per week 00:10 05:01 $…`` instead of
+# ``Bathing 00:10 7 days per week …``.
+_TASK_DAYS_FIRST_RE = re.compile(
+    rf"(?P<n>{_TASK_NAME_ALT})\s+"
+    r"(?P<days>\d+\s*days?\s*(?:per\s*)?week)\s+"
+    rf"(?P<min>\d{{1,3}}[.:]\d{{2}})\s+"
+    rf"(?P<mt>\d+[.:]\d{{2}})\s+"
+    r"(?P<amt>[\$]?\s*\d[\d,]*\.?\d*)",
+    re.I,
+)
+
 
 def _normalize_token_hhmm(token: str) -> str:
     """Map OCR ``02.05`` / ``70.48`` tokens into colon form; avoid mangling dollar ``216.72``."""
@@ -422,11 +447,10 @@ def _row_to_str(row: Sequence[str | None]) -> str:
     return " ".join(parts)
 
 
-def _parse_task_from_line(line: str) -> dict[str, Any] | None:
-    line = re.sub(r"[ \t]+", " ", line.strip())
-    m = _TASK_LINE_RE.search(line) or _TASK_LOOSE_RE.search(line)
-    if not m:
-        return None
+def _build_task_dict_from_regex_match(
+    m: re.Match[str],
+    line: str,
+) -> dict[str, Any] | None:
     raw_name = m.group("n").strip()
     name = canonical_task_name(raw_name)
     if name is None:
@@ -464,6 +488,18 @@ def _parse_task_from_line(line: str) -> dict[str, Any] | None:
         "monthly_time_str": raw_mt,
         "monthly_amount": float(amt),
     }
+
+
+def _parse_task_from_line(line: str) -> dict[str, Any] | None:
+    line = re.sub(r"[ \t]+", " ", line.strip())
+    m = (
+        _TASK_LINE_RE.search(line)
+        or _TASK_LOOSE_RE.search(line)
+        or _TASK_DAYS_FIRST_RE.search(line)
+    )
+    if not m:
+        return None
+    return _build_task_dict_from_regex_match(m, line)
 
 
 def _extract_tasks_from_text(text: str) -> list[dict[str, Any]]:
@@ -575,7 +611,8 @@ def _extract_monthly_totals(text: str) -> tuple[str, float]:
 def _rapidocr_available() -> bool:
     try:
         import rapidocr_onnxruntime  # noqa: F401
-    except ImportError:
+    except ImportError as e:
+        logger.warning("RapidOCR import unavailable: %s", e)
         return False
     return True
 
@@ -622,10 +659,10 @@ def _task_text_with_optional_ocr(
 ) -> str:
     if text.strip() and _should_merge_ocr_for_tasks(merged_task_count, mt=mt, tot=tot):
         try:
-            dpi = int(os.environ.get("MDHHS_OCR_DPI", "").strip() or "280")
-            dpi = max(180, min(400, dpi))
+            dpi = int(os.environ.get("MDHHS_OCR_DPI", "").strip() or "160")
+            dpi = max(120, min(400, dpi))
         except ValueError:
-            dpi = 280
+            dpi = 160
         otxt = _ocr_pdf_text(path, dpi=dpi)
         if len(otxt.strip()) >= 120:
             logger.info(
@@ -693,6 +730,9 @@ _PHONE_IN_LINE_RE = re.compile(
 _EMAIL_IN_LINE_RE = re.compile(
     r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63}", re.I
 )
+_OCR_EMAIL_IN_LINE_RE = re.compile(
+    r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+)\s+(gov|com|org|net|edu)\b", re.I
+)
 _CASE_NUMBER_RE = re.compile(
     r"\b\d{5,}-\d+[A-Za-z]?\b|\b\d{3,}-\d+\b|\b\d{6,}-\d+\b",
 )
@@ -743,7 +783,11 @@ def _extract_paired_fields(text: str) -> dict[str, str]:
             continue
         low = L.lower()
 
-        if "client name" in low and "client id" in low and "number" in low:
+        if (
+            re.search(r"(?:client|chient|clicnt)\s+name", low)
+            and re.search(r"(?:client|chient|clicnt)\s+id", low)
+            and "number" in low
+        ):
             nx = next_nonblank(i)
             if nx and "client_name" not in out:
                 _, row = nx
@@ -763,13 +807,13 @@ def _extract_paired_fields(text: str) -> dict[str, str]:
                         out["county_name"] = county
                     out["case_number"] = case
 
-        if re.search(r"provider\s+name\b", low) and not re.search(
+        if re.search(r"provider\s+nam[eo]\b", low) and not re.search(
             r"\bworker\b", low
         ):
             nx = next_nonblank(i)
             if nx and "provider_name" not in out:
                 _, row = nx
-                clean = row.strip()
+                clean = re.sub(r"\$.*$", "", row).strip()
                 if clean and "@" not in clean and not clean.lower().startswith("pay"):
                     out["provider_name"] = clean
 
@@ -793,6 +837,11 @@ def _extract_paired_fields(text: str) -> dict[str, str]:
                     mem = _EMAIL_IN_LINE_RE.search(row)
                     if mem and "asw_email" not in out:
                         out["asw_email"] = mem.group(0).strip()
+                    moc = _OCR_EMAIL_IN_LINE_RE.search(row)
+                    if moc and "asw_email" not in out:
+                        out["asw_email"] = (
+                            f"{moc.group(1).strip()}.{moc.group(2).strip()}"
+                        )
                     scanned += 1
                 j += 1
 
@@ -800,12 +849,34 @@ def _extract_paired_fields(text: str) -> dict[str, str]:
             nx = next_nonblank(i)
             if nx and "asw_name" not in out:
                 _, row = nx
-                if (
+                mph = re.match(
+                    r"^(.+?)\s+((?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}"
+                    r"(?:\s*(?:x|ext\.?)\s*\d+)?)\s*$",
+                    row,
+                )
+                if mph:
+                    out["asw_name"] = mph.group(1).strip()
+                    out.setdefault("asw_phone", mph.group(2).strip())
+                elif (
                     "@" not in row
                     and not _PHONE_IN_LINE_RE.search(row)
                     and not re.search(r"\b(address|phone|email|provider|section)\b", row, re.I)
                 ):
                     out["asw_name"] = row.strip()
+
+        if "date" in low and re.search(r"\b(?:email|emall)\b", low):
+            nx = next_nonblank(i)
+            if nx:
+                _, row = nx
+                mem = _EMAIL_IN_LINE_RE.search(row)
+                if mem and "asw_email" not in out:
+                    out["asw_email"] = mem.group(0).strip()
+                moc = _OCR_EMAIL_IN_LINE_RE.search(row)
+                if moc and "asw_email" not in out:
+                    out["asw_email"] = f"{moc.group(1).strip()}.{moc.group(2).strip()}"
+                mdt = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4})", row)
+                if mdt and "auth_date" not in out:
+                    out["auth_date"] = _coerce_auth_date(mdt.group(1))
 
         if re.fullmatch(r"(?:authorization\s+)?date", low):
             nx = next_nonblank(i)
@@ -1059,7 +1130,106 @@ def _pypdfium_text(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _ocr_pdf_text(path: Path, *, dpi: int = 220) -> str:
+def _ocr_box_center(box: Any) -> tuple[float, float]:
+    """Return approximate center point for a RapidOCR quadrilateral box."""
+    try:
+        xs = [float(p[0]) for p in box]
+        ys = [float(p[1]) for p in box]
+    except (TypeError, ValueError, IndexError):
+        return (0.0, 0.0)
+    if not xs or not ys:
+        return (0.0, 0.0)
+    return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
+def _rapidocr_result_to_text(result: Any) -> str:
+    """
+    Convert RapidOCR fragments into readable text, preserving table rows.
+
+    RapidOCR returns one fragment per detected text box. Joining those fragments
+    one per line can split a single authorization row into several lines, which
+    makes the task parser miss Duration / Days / Monthly Time columns. Group by
+    vertical center and sort left-to-right so rows read like the source table.
+    """
+    if not result:
+        return ""
+
+    rows: list[dict[str, Any]] = []
+    for item in result:
+        try:
+            box, raw_text = item[0], str(item[1]).strip()
+        except (TypeError, IndexError):
+            continue
+        if not raw_text:
+            continue
+        cx, cy = _ocr_box_center(box)
+        placed = False
+        for row in rows:
+            if abs(float(row["cy"]) - cy) <= float(row["tol"]):
+                row["items"].append((cx, raw_text))
+                n = len(row["items"])
+                row["cy"] = (float(row["cy"]) * (n - 1) + cy) / n
+                placed = True
+                break
+        if not placed:
+            try:
+                ys = [float(p[1]) for p in box]
+                height = max(ys) - min(ys)
+            except (TypeError, ValueError, IndexError):
+                height = 12.0
+            rows.append(
+                {
+                    "cy": cy,
+                    "tol": max(8.0, min(24.0, height * 0.7)),
+                    "items": [(cx, raw_text)],
+                }
+            )
+
+    lines: list[str] = []
+    for row in sorted(rows, key=lambda r: float(r["cy"])):
+        parts = [txt for _x, txt in sorted(row["items"], key=lambda it: float(it[0]))]
+        line = re.sub(r"\s+", " ", " ".join(parts)).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _ocr_image_variants(pil: Any) -> list[Any]:
+    """Render variants for blurry/low-contrast phone scans without extra binaries."""
+    try:
+        from PIL import ImageEnhance, ImageFilter, ImageOps  # type: ignore[import-not-found]
+    except ImportError:
+        return [pil.convert("RGB")]
+
+    rgb = pil.convert("RGB")
+    gray = ImageOps.grayscale(rgb)
+    enhanced = ImageOps.autocontrast(gray)
+    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.8)
+    sharpened = enhanced.filter(
+        ImageFilter.UnsharpMask(radius=1.4, percent=180, threshold=3)
+    )
+
+    mode = os.environ.get("MDHHS_OCR_VARIANTS", "fast").strip().lower()
+    if mode not in {"full", "1", "true", "yes", "on"}:
+        return [sharpened.convert("RGB")]
+
+    variants = [rgb, sharpened.convert("RGB")]
+
+    # Binary text often helps when the source is a slightly blurry image of a
+    # black-and-white form. Keep it last because it can lose faint gray text.
+    thresholded = sharpened.point(lambda px: 255 if px > 170 else 0)
+    variants.append(thresholded.convert("RGB"))
+    return variants
+
+
+def _ocr_text_score(text: str) -> tuple[int, int, int]:
+    """Score OCR output by parsed task coverage, roll-up presence, then length."""
+    tasks = _extract_tasks_from_text(text)
+    mt, tot = _extract_monthly_totals(text)
+    return (len(tasks), int(bool(mt and tot > 0)), len(text.strip()))
+
+
+def _ocr_pdf_text(path: Path, *, dpi: int = 160) -> str:
     """
     Last-resort OCR for image-only (scanned) PDFs.
 
@@ -1068,8 +1238,9 @@ def _ocr_pdf_text(path: Path, *, dpi: int = 220) -> str:
     install required. Returns ``""`` when RapidOCR is not installed so
     callers can treat OCR as an optional capability.
 
-    DPI 220 is a compromise between accuracy and cold-start latency
-    (~1-2 s/page on modern CPUs). Bump to 300 for poor-quality scans.
+    DPI 160 plus a sharpen/contrast pass gives better results on blurry phone
+    scans while keeping single-page uploads reasonably bounded. Set
+    ``MDHHS_OCR_VARIANTS=full`` for a slower multi-pass OCR rescue.
     """
     try:
         import numpy as np  # type: ignore[import-not-found]
@@ -1079,10 +1250,11 @@ def _ocr_pdf_text(path: Path, *, dpi: int = 220) -> str:
         return ""
     try:
         from rapidocr_onnxruntime import RapidOCR  # type: ignore[import-not-found]
-    except ImportError:
+    except ImportError as e:
         logger.info(
             "RapidOCR not installed — skipping OCR fallback. "
-            "pip install rapidocr-onnxruntime to enable."
+            "pip install rapidocr-onnxruntime to enable. Import error: %s",
+            e,
         )
         return ""
 
@@ -1106,14 +1278,21 @@ def _ocr_pdf_text(path: Path, *, dpi: int = 220) -> str:
             page = doc[i]
             try:
                 pil = page.render(scale=scale).to_pil().convert("RGB")
-                arr = np.array(pil)
-                result, _ = engine(arr)
+                best_text = ""
+                best_score = (-1, -1, -1)
+                for variant in _ocr_image_variants(pil):
+                    arr = np.array(variant)
+                    result, _ = engine(arr)
+                    candidate = _rapidocr_result_to_text(result)
+                    score = _ocr_text_score(candidate)
+                    if score > best_score:
+                        best_text = candidate
+                        best_score = score
             finally:
                 page.close()
-            if not result:
+            if not best_text.strip():
                 continue
-            # RapidOCR returns rows of [bbox, text, confidence], top-to-bottom.
-            pages_text.append("\n".join(str(r[1]) for r in result))
+            pages_text.append(best_text)
     finally:
         doc.close()
     joined = "\n".join(pages_text)

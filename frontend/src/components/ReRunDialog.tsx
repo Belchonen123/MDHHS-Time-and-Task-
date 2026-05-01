@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Clock3, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   ApiError,
@@ -40,6 +40,9 @@ const DEFAULT_IDEAL_START_BY_DAY: Record<string, string> = {
   Saturday: "1:00 PM",
   Sunday: "1:00 PM",
 }
+
+const WEEKDAY_DAYS = WEEK_DAYS.filter((d) => d !== "Saturday" && d !== "Sunday")
+const WEEKEND_DAYS = WEEK_DAYS.filter((d) => d === "Saturday" || d === "Sunday")
 
 /** Display time → "HH:MM" for <input type="time">; "" on parse failure. */
 function toTimeInputValue(display: string): string {
@@ -92,6 +95,9 @@ export function ReRunDialog({
   const [startByDay, setStartByDay] = useState<Record<string, string>>(
     () => ({ ...DEFAULT_IDEAL_START_BY_DAY }),
   )
+  const [bulkStartTime, setBulkStartTime] = useState(() =>
+    toTimeInputValue(DEFAULT_IDEAL_START_BY_DAY.Monday),
+  )
   const [useLlm, setUseLlm] = useState(false)
   const [llmNotes, setLlmNotes] = useState("")
   const [loading, setLoading] = useState(false)
@@ -140,16 +146,25 @@ export function ReRunDialog({
     )
     if (sourcePlan) {
       const { times } = initEditorFromPlan(sourcePlan)
-      setStartByDay(
-        Object.fromEntries(WEEK_DAYS.map((d) => [d, times[d]!.start])) as Record<
-          string,
-          string
-        >,
-      )
+      const next = Object.fromEntries(
+        WEEK_DAYS.map((d) => [d, times[d]!.start]),
+      ) as Record<string, string>
+      setStartByDay(next)
+      setBulkStartTime(toTimeInputValue(next.Monday || DEFAULT_IDEAL_START_BY_DAY.Monday))
     } else {
       setStartByDay({ ...DEFAULT_IDEAL_START_BY_DAY })
+      setBulkStartTime(toTimeInputValue(DEFAULT_IDEAL_START_BY_DAY.Monday))
     }
   }, [open, initialMonth, sourcePlan])
+
+  const applyStartTimeToDays = (days: readonly string[]) => {
+    const display = fromTimeInputValue(bulkStartTime)
+    setStartByDay((prev) => {
+      const next = { ...prev }
+      for (const d of days) next[d] = display
+      return next
+    })
+  }
 
   const submitRerun = async () => {
     const start_time_by_weekday: Record<string, string> = {}
@@ -271,6 +286,50 @@ export function ReRunDialog({
                 blocks. Only <strong>start</strong> times are sent when re-running; the
                 typical <strong>end</strong> from the saved plan is shown below for reference.
               </p>
+              <div className="flex flex-wrap items-end gap-3 rounded-md border border-primary-100 bg-primary-50/50 px-3 py-3">
+                <label className="flex min-w-[180px] flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-primary-900">
+                    Weekly shift start
+                  </span>
+                  <Input
+                    type="time"
+                    value={bulkStartTime}
+                    onChange={(e) => setBulkStartTime(e.target.value)}
+                    disabled={loading}
+                    className="h-9 bg-white tabular text-sm"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => applyStartTimeToDays(WEEK_DAYS)}
+                    disabled={loading}
+                    className="gap-2"
+                  >
+                    <Clock3 className="h-3.5 w-3.5" />
+                    Apply all week
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => applyStartTimeToDays(WEEKDAY_DAYS)}
+                    disabled={loading}
+                  >
+                    Weekdays
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => applyStartTimeToDays(WEEKEND_DAYS)}
+                    disabled={loading}
+                  >
+                    Weekend
+                  </Button>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 md:grid-cols-7">
                 {WEEK_DAYS.map((d) => (
                   <label

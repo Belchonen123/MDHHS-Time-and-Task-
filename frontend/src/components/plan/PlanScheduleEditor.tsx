@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { RotateCcw, Loader2, CheckCircle2, AlertTriangle } from "lucide-react"
+import { RotateCcw, Loader2, CheckCircle2, AlertTriangle, Clock3 } from "lucide-react"
 import { toast } from "sonner"
 
 import { patchPlanConfig } from "@/api/client"
@@ -34,6 +34,9 @@ const DEFAULT_START_TIMES: Record<string, string> = {
   Saturday: "1:00 PM",
   Sunday: "1:00 PM",
 }
+
+const WEEKDAY_DAYS = WEEK_DAYS.filter((d) => d !== "Saturday" && d !== "Sunday")
+const WEEKEND_DAYS = WEEK_DAYS.filter((d) => d === "Saturday" || d === "Sunday")
 
 /** Display time → "HH:MM" for <input type="time">; "" on parse failure. */
 function toTimeInputValue(display: string): string {
@@ -361,6 +364,9 @@ export function PlanScheduleEditor({
   weekdayPreferredMinutes,
 }: ScheduleEditorProps) {
   const [cfg, setCfg] = useState<ScheduleConfig>(() => buildInitialConfig(plan))
+  const [bulkStartTime, setBulkStartTime] = useState(() =>
+    toTimeInputValue(buildInitialConfig(plan).start_time_by_weekday.Monday || "1:00 PM"),
+  )
   const [saving, setSaving] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
 
@@ -369,7 +375,9 @@ export function PlanScheduleEditor({
   useEffect(() => {
     if (lastSeenKeyRef.current !== planKey) {
       lastSeenKeyRef.current = planKey
-      setCfg(buildInitialConfig(plan))
+      const next = buildInitialConfig(plan)
+      setCfg(next)
+      setBulkStartTime(toTimeInputValue(next.start_time_by_weekday.Monday || "1:00 PM"))
     }
   }, [planKey, plan])
 
@@ -495,6 +503,23 @@ export function PlanScheduleEditor({
         [weekday]: value,
       },
     }))
+  }
+
+  const applyStartTimeToDays = (days: readonly string[]) => {
+    const display = fromTimeInputValue(bulkStartTime)
+    setCfg((prev) => {
+      const next = { ...prev.start_time_by_weekday }
+      for (const d of days) next[d] = display
+      return {
+        ...prev,
+        start_time_by_weekday: next,
+      }
+    })
+    toast.success(
+      days.length === WEEK_DAYS.length
+        ? `Weekly shift start set to ${display}`
+        : `Shift starts updated to ${display}`,
+    )
   }
 
   const resetToDefaults = () => {
@@ -704,6 +729,49 @@ export function PlanScheduleEditor({
             </div>
             <div className="text-[11px] text-neutral-500">
               Defaults: weekdays 7 AM · weekends 12 PM
+            </div>
+          </div>
+          <div className="mb-4 flex flex-wrap items-end gap-3 rounded-md border border-primary-100 bg-primary-50/50 px-3 py-3">
+            <label className="flex min-w-[180px] flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-primary-900">
+                Weekly shift start
+              </span>
+              <Input
+                type="time"
+                value={bulkStartTime}
+                onChange={(e) => setBulkStartTime(e.target.value)}
+                className="h-9 bg-white tabular text-sm"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => applyStartTimeToDays(WEEK_DAYS)}
+                disabled={saving}
+                className="gap-2"
+              >
+                <Clock3 className="h-3.5 w-3.5" />
+                Apply all week
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => applyStartTimeToDays(WEEKDAY_DAYS)}
+                disabled={saving}
+              >
+                Weekdays
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => applyStartTimeToDays(WEEKEND_DAYS)}
+                disabled={saving}
+              >
+                Weekend
+              </Button>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 md:grid-cols-7">

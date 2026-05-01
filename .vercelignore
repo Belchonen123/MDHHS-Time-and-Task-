@@ -1,0 +1,4 @@
+backend/.pytest_tmp/
+backend/.pytest_tmp*/
+**/.pytest_cache/
+**/__pycache__/

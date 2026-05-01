@@ -443,6 +443,29 @@ def test_summary_has_hours_minutes_companion(
     )
 
 
+def test_weekly_pattern_has_professional_total_row(
+    built_workbook: tuple[Path, "openpyxl.Workbook"],
+) -> None:
+    _, wb = built_workbook
+    ws = wb["Weekly Pattern"]
+
+    assert ws.cell(11, 1).value == "WEEKLY TOTAL"
+    assert ws.cell(11, 4).value == 988
+    assert ws.cell(11, 5).value == "16:28 (16h 28m)"
+    assert ws.cell(11, 6).value == "16 hrs 28 mins"
+    assert ws.freeze_panes == "A4"
+    assert ws.auto_filter.ref == "A3:F11"
+
+
+def test_workbook_has_professional_tab_colors_and_tables(
+    built_workbook: tuple[Path, "openpyxl.Workbook"],
+) -> None:
+    _, wb = built_workbook
+    assert wb["Summary"].sheet_properties.tabColor is not None
+    assert "WeeklyPatternTable" in wb["Weekly Pattern"].tables
+    assert "TaskReconciliationTable" in wb["Task Reconciliation"].tables
+
+
 def test_task_reconciliation_ehhs_and_travel_subtotals(
     tmp_path: Path,
 ) -> None:

@@ -409,9 +409,12 @@ export function UploadHero({
       // instead of global toasts (less noise during the morph).
       let result: UploadResult | null = null
       let errorMessage: string | null = null
+      /** Set when fetch fails so we avoid labeling a 500 as a “PDF parse” error. */
+      let caughtHttpStatus: number | undefined
       try {
         result = await uploadPDF(file, submitMonth, submitAvailability)
       } catch (err) {
+        if (err instanceof ApiError) caughtHttpStatus = err.status
         if (err instanceof ApiError && isDayCapacityDetail(err.detail)) {
           setShakeKey((n) => n + 1)
           await paced
@@ -469,6 +472,15 @@ export function UploadHero({
             `The browser could not reach the API (often \`npm run dev\` isn't running, or the app is on the wrong URL). ` +
             `From the project root run \`npm run dev\`: FastAPI serves on http://127.0.0.1:8001 and Vite uses http://localhost:3456 ` +
             `by default (\`/api\` is proxied to the backend). If 3456 is busy, open the Local URL Vite prints in the terminal, then reload and try again.`
+        } else if (
+          caughtHttpStatus !== undefined &&
+          caughtHttpStatus >= 500 &&
+          caughtHttpStatus < 600
+        ) {
+          title = `Server error (${caughtHttpStatus})`
+          message =
+            raw ||
+            "The API failed while processing this upload — this is usually not a bad PDF file. Check hosted logs: writable storage for the SQLite DB and uploaded files (`backend/data`, `backend/storage`), and that `VITE_API_BASE_URL` points at the FastAPI backend."
         } else {
           message = raw || "Couldn't read this PDF. Expected MDHHS-6064-P format."
         }

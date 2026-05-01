@@ -218,9 +218,18 @@ class PlanPreviewBody(BaseModel):
     availability: dict[str, Any]
 
 
+class ArtifactPayload(BaseModel):
+    """Generated file bytes returned with uploads on stateless deployments."""
+
+    filename: str
+    media_type: str
+    base64: str
+
+
 class UploadResponse(BaseModel):
     client: ClientResponse
     plan: PlanResponse
+    artifacts: dict[str, ArtifactPayload] = Field(default_factory=dict)
 
 
 class ClientDetailResponse(BaseModel):

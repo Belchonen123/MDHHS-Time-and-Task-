@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import os
 import re
 import shutil
 import uuid
@@ -38,6 +40,7 @@ from .db import Client, Plan, SessionLocal, STORAGE_DIR
 from .extract import ExtractedForm, extract_from_pdf
 from .llm_refine import refine_extracted_form
 from .models import (
+    ArtifactPayload,
     CheckOut,
     ClientDetailResponse,
     ClientListItem,
@@ -66,7 +69,7 @@ from .validate import (
     validation_report_to_dict,
 )
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="" if os.getenv("VERCEL") else "/api")
 logger = logging.getLogger(__name__)
 
 
@@ -651,6 +654,51 @@ def _emit_outputs(
     build_pdf(form, schedule, report, pdf_path)
 
 
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _artifact_payload(path: Path, filename: str, media_type: str) -> ArtifactPayload | None:
+    try:
+        if not path.is_file():
+            return None
+        return ArtifactPayload(
+            filename=filename,
+            media_type=media_type,
+            base64=base64.b64encode(path.read_bytes()).decode("ascii"),
+        )
+    except OSError:
+        logger.exception("Failed to attach generated artifact payload: %s", path)
+        return None
+
+
+def _vercel_upload_artifacts(
+    client_id: str,
+    version: int,
+    xlsx_path: Path,
+    pdf_path: Path,
+) -> dict[str, ArtifactPayload]:
+    """Attach small generated files to upload responses so live downloads survive /tmp resets."""
+    if not os.getenv("VERCEL"):
+        return {}
+    artifacts: dict[str, ArtifactPayload] = {}
+    xlsx = _artifact_payload(
+        xlsx_path,
+        f"{client_id}-v{version}-plan.xlsx",
+        XLSX_MEDIA_TYPE,
+    )
+    if xlsx is not None:
+        artifacts["xlsx"] = xlsx
+        artifacts["weekly"] = ArtifactPayload(
+            filename=f"{client_id}-v{version}-weekly.xlsx",
+            media_type=xlsx.media_type,
+            base64=xlsx.base64,
+        )
+    pdf = _artifact_payload(pdf_path, f"{client_id}-v{version}-plan.pdf", "application/pdf")
+    if pdf is not None:
+        artifacts["pdf"] = pdf
+    return artifacts
+
+
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", version="0.1.0")
@@ -975,6 +1023,7 @@ async def upload_client_pdf(
     return UploadResponse(
         client=orm_client_to_pydantic(client),
         plan=orm_plan_to_pydantic(plan),
+        artifacts=_vercel_upload_artifacts(client.client_id, plan.version, abs_x, abs_p),
     )
 
 

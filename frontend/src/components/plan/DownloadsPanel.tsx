@@ -25,6 +25,7 @@ import {
   isLikelyDownloadNetworkFailure,
 } from "@/lib/downloadBlob"
 import { easeOutSoft } from "@/lib/motion"
+import { downloadStoredArtifact } from "@/lib/sessionArtifacts"
 import { cn } from "@/lib/utils"
 import type { Plan } from "@/types"
 
@@ -128,6 +129,14 @@ function DownloadCard({
       window.setTimeout(() => setConfirmed(false), 2000)
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Download failed."
+      if (
+        /client not found/i.test(msg) &&
+        downloadStoredArtifact(clientId, plan.version, config.key, name)
+      ) {
+        setConfirmed(true)
+        window.setTimeout(() => setConfirmed(false), 2000)
+        return
+      }
       if (isLikelyDownloadNetworkFailure(msg)) {
         toast.error("Can't reach the server to download this file", {
           description: DOWNLOAD_NETWORK_TOAST_DESCRIPTION,

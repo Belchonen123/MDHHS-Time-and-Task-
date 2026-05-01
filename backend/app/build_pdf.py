@@ -11,6 +11,7 @@ The PDF mirrors the XLSX reconciliation layout minus the Schedule Math tab
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -32,7 +33,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from .build_xlsx import _money_from_minutes
+from .build_xlsx import _fmt_hm_words, _money_from_minutes
 from .calculate import (
     CalibratedSchedule,
     compute_mdhhs_form_amount,
@@ -41,7 +42,11 @@ from .calculate import (
     compute_task_amount,
     schedule_to_dict,
 )
-from .extract import ExtractedForm
+from .extract import (
+    ExtractedForm,
+    _coerce_roll_up_hhmm,
+    normalize_duration_hhmm,
+)
 from .validate import ValidationReport
 
 # --- Palette ----------------------------------------------------------------
@@ -83,6 +88,29 @@ def _shorten_task(name: str) -> str:
 
 def _fmt_money(x: float) -> str:
     return f"${x:,.2f}"
+
+
+def _auth_monthly_time_display(task: dict[str, Any], computed_auth_min: int) -> str:
+    """Prefer the PDF's printed monthly HH:MM when valid; else 4.3-week computed."""
+    raw = str(task.get("monthly_time_str") or "").strip()
+    if raw:
+        coerced = _coerce_roll_up_hhmm(re.sub(r"\s+", "", raw))
+        if normalize_duration_hhmm(coerced):
+            return coerced
+    return _fmt_hm(computed_auth_min) or "—"
+
+
+def _dur_pdf_display(total_min: int) -> str:
+    """HH:MM plus ``(44h 26m)`` for Plan of Care daily rows and totals."""
+    hm = _fmt_hm(total_min) or ""
+    words = _fmt_hm_words(total_min)
+    if hm and words:
+        return f"{hm} ({words})"
+    if hm:
+        return hm
+    if words:
+        return words
+    return "—"
 
 
 def _fmt_hm(total_min: int | None) -> str:
@@ -318,7 +346,13 @@ def _page1_summary(
 
     # --- Section 1: MDHHS Authorization
     story.append(Paragraph("Section 1 — MDHHS Authorization (from the 6064-P PDF)", st["h2"]))
-    sec1_head = ["Task", "Min / day", "Days / wk", "Monthly time", "Monthly $"]
+    sec1_head = [
+        "Task",
+        "Time / day (HH:MM)",
+        "Days / wk",
+        "Time / month (HH:MM)",
+        "Monthly $",
+    ]
     sec1_rows: list[list[Any]] = [sec1_head]
     total_auth_min = compute_mdhhs_form_minutes(tasks)
     total_auth_amt = compute_mdhhs_form_amount(tasks, pay)
@@ -334,9 +368,9 @@ def _page1_summary(
                 amt = compute_task_amount(mpd, dpw, pay)
             sec1_rows.append([
                 Paragraph(_para_xml(nm), st["small"]) if nm else "",
-                f"{mpd}" if nm else "",
+                (_fmt_hm(mpd) or "—") if nm else "",
                 f"{dpw}" if nm else "",
-                (_fmt_hm(amm) or "—") if nm else "",
+                _auth_monthly_time_display(t, amm) if nm else "",
                 _fmt_money(amt) if nm else "",
             ])
         else:
@@ -633,7 +667,17 @@ def _page3_4_daily(
     ))
     story.append(Spacer(1, 0.08 * inch))
 
-    head = ["#", "Date", "DoW", "Shift", "In", "Out", "Dur", "Tasks (min)", "$"]
+    head = [
+        "#",
+        "Date",
+        "DoW",
+        "Shift",
+        "In",
+        "Out",
+        "Duration (HH:MM + h/m)",
+        "Tasks (min)",
+        "$",
+    ]
     rows: list[list[Any]] = [head]
     auth_mm = int(sd.get("mdhhs_monthly_minutes") or 0)
     auth_amt = float(sd.get("mdhhs_monthly_amount") or 0.0)
@@ -663,7 +707,7 @@ def _page3_4_daily(
             date_s,
             dow_short,
             shift.replace("_", " ").title() if shift else "",
-            ci, co, _fmt_hm(dur) or "—",
+            ci, co, _dur_pdf_display(dur),
             task_txt,
             _fmt_money(cost),
         ])
@@ -677,12 +721,12 @@ def _page3_4_daily(
     total_row_idx = len(rows)
     rows.append([
         "Delivered total", "", "", "", "", "",
-        _fmt_hm(total_min) or "—", f"{total_min} min", _fmt_money(total_cost),
+        _dur_pdf_display(total_min), f"{total_min} min", _fmt_money(total_cost),
     ])
     auth_row_idx = len(rows)
     rows.append([
         "Authorized (6064-P cap)", "", "", "", "", "",
-        _fmt_hm(auth_mm) or "—", f"{auth_mm} min", _fmt_money(auth_amt),
+        _dur_pdf_display(auth_mm), f"{auth_mm} min", _fmt_money(auth_amt),
     ])
     del_amt_g = sd.get("delivered_amount")
     if del_amt_g is None:
@@ -715,7 +759,7 @@ def _page3_4_daily(
     bill_row_idx = len(rows)
     rows.append([
         "Billable (cap applied)", "", "", "", "", "",
-        _fmt_hm(bill_mm) or "—", f"{bill_mm} min", _fmt_money(bill_amt_g),
+        _dur_pdf_display(bill_mm), f"{bill_mm} min", _fmt_money(bill_amt_g),
     ])
     var_row_idx = len(rows)
     var_min = total_min - auth_mm
@@ -733,13 +777,13 @@ def _page3_4_daily(
     )
     rows.append([
         cal_label, "", "", "", "", "",
-        _fmt_hm(var_min) or "—", f"{var_min:+d} min", f"{var_amt:+,.2f}",
+        _dur_pdf_display(var_min), f"{var_min:+d} min", f"{var_amt:+,.2f}",
     ])
 
-    # Widen "Dur" for fixed-width HH:MM (e.g. "03:08", "44:26").
+    # Duration column: HH:MM plus human-readable h/m (e.g. "44:26 (44h 26m)").
     col_widths = [
         0.3 * inch, 0.6 * inch, 0.4 * inch, 0.75 * inch, 0.6 * inch,
-        0.6 * inch, 0.7 * inch, 3.0 * inch, 0.55 * inch,
+        0.6 * inch, 0.95 * inch, 2.75 * inch, 0.55 * inch,
     ]
     tbl = Table(rows, colWidths=col_widths, repeatRows=1)
     s = TableStyle([

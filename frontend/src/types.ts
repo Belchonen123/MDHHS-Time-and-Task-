@@ -237,9 +237,16 @@ export interface ClientDetail {
   plans: Plan[]
 }
 
+export type DownloadArtifact = {
+  filename: string
+  media_type: string
+  base64: string
+}
+
 export interface UploadResult {
   client: Client
   plan: Plan
+  artifacts?: Partial<Record<"xlsx" | "pdf" | "source" | "weekly", DownloadArtifact>>
 }
 
 /** PDF extraction only — `POST /api/clients/preview-parse`. */

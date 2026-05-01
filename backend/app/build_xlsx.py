@@ -47,6 +47,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
 try:
@@ -141,6 +142,19 @@ LAYOUT: dict[str, float | int] = {
 # Very pale variance hint (per-task rows, Task Reconciliation)
 FILL_VARIANCE_OK = PatternFill("solid", fgColor="C6EFCE")
 FILL_VARIANCE_NEG = PatternFill("solid", fgColor="FFC7CE")
+FILL_TITLE_ACCENT = PatternFill("solid", fgColor="17365D")
+FILL_TABLE_BLUE = "TableStyleMedium2"
+FILL_TABLE_GREEN = "TableStyleMedium4"
+
+TAB_COLORS: dict[str, str] = {
+    "Summary": "17365D",
+    "Weekly Schedule": "1F4E78",
+    "Weekly Pattern": "2E75B6",
+    "Daily Schedule": "5B9BD5",
+    "Schedule Math": "70AD47",
+    "Task Reconciliation": "FFC000",
+    "Instructions": "A5A5A5",
+}
 
 
 def _apply_block_layout(
@@ -347,6 +361,105 @@ def _fmt_hhmm(minutes: int | None) -> str:
     sign = "-" if m < 0 else ""
     h, r = divmod(abs(m), 60)
     return f"{sign}{h:02d}:{r:02d}"
+
+
+def _fmt_hm_words(total_min: int | None) -> str:
+    """Whole minutes → readable ``44h 26m`` / ``2h 5m`` / ``45m`` (Plan of Care totals)."""
+    if total_min is None:
+        return ""
+    m = int(total_min)
+    if m == 0:
+        return ""
+    sign = "-" if m < 0 else ""
+    abs_m = abs(m)
+    h, mm = divmod(abs_m, 60)
+    if h and mm:
+        body = f"{h}h {mm}m"
+    elif h:
+        body = f"{h}h"
+    else:
+        body = f"{mm}m"
+    return f"{sign}{body}"
+
+
+def _fmt_hhmm_with_words(minutes: int | None) -> str:
+    """``HH:MM`` plus ``(44h 26m)`` when both forms are non-empty — for spreadsheet totals."""
+    hm = _fmt_hhmm(minutes)
+    words = _fmt_hm_words(minutes)
+    if hm and words:
+        return f"{hm} ({words})"
+    return hm or words
+
+
+def _fmt_hours_minutes_long(minutes: int | None) -> str:
+    """Readable workbook display: ``40 hrs 30 mins`` with zero-padded minutes."""
+    if minutes is None:
+        return ""
+    m = int(minutes)
+    if m == 0:
+        return "0 hrs 00 mins"
+    sign = "-" if m < 0 else ""
+    h, mm = divmod(abs(m), 60)
+    return f"{sign}{h} hrs {mm:02d} mins"
+
+
+def _safe_table_name(name: str) -> str:
+    """Excel table names: letters/numbers/underscore, unique enough for this workbook."""
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", name.strip())
+    if not clean or not clean[0].isalpha():
+        clean = f"T_{clean}"
+    return clean[:240]
+
+
+def _add_excel_table(
+    ws: Worksheet,
+    *,
+    ref: str,
+    name: str,
+    style: str = FILL_TABLE_BLUE,
+) -> None:
+    """Best-effort real Excel table for filters/banding; formatting still works if skipped."""
+    try:
+        tab = Table(displayName=_safe_table_name(name), ref=ref)
+        tab.tableStyleInfo = TableStyleInfo(
+            name=style,
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        ws.add_table(tab)
+    except ValueError:
+        logger.debug("Skipping duplicate/overlapping Excel table %s on %s", name, ws.title)
+
+
+def _professionalize_sheet(
+    ws: Worksheet,
+    *,
+    title_rows: int = 1,
+    freeze: str | None = None,
+    auto_filter: str | None = None,
+) -> None:
+    """Global finishing pass: tab colors, page margins, view, filters, and title polish."""
+    if ws.title in TAB_COLORS:
+        ws.sheet_properties.tabColor = TAB_COLORS[ws.title]
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 90
+    if freeze:
+        ws.freeze_panes = freeze
+    if auto_filter:
+        ws.auto_filter.ref = auto_filter
+    try:
+        ws.page_margins.left = 0.25
+        ws.page_margins.right = 0.25
+        ws.page_margins.top = 0.55
+        ws.page_margins.bottom = 0.45
+        ws.page_margins.header = 0.2
+        ws.page_margins.footer = 0.2
+    except AttributeError:
+        pass
+    for r in range(1, min(title_rows, ws.max_row) + 1):
+        ws.row_dimensions[r].height = max(float(ws.row_dimensions[r].height or 0), 24.0)
 
 
 def _ordered_task_names(
@@ -602,12 +715,19 @@ def _build_summary(
     MONEY_SIGN = '"+$"#,##0.00;[Red]"-$"#,##0.00;"$0.00"'
 
     hh_b = _fmt_hhmm(bill_min) or ""
+    bill_hm_long = _fmt_hours_minutes_long(bill_min)
     footer_bill = f"{bill_min:,} min" + (f"  ·  {hh_b}" if hh_b else "")
     ah = _fmt_hhmm(auth_min) or ""
+    auth_hm_long = _fmt_hours_minutes_long(auth_min)
     footer_auth = f"{auth_min:,} min" + (f"  ·  {ah}" if ah else "")
 
     dd_h = _fmt_hhmm(del_min) or ""
+    del_hm_long = _fmt_hours_minutes_long(del_min)
     del_footer = f"{del_min:,} min" + (f"  ·  {dd_h}" if dd_h else "")
+
+    footer_bill = f"{footer_bill} / {bill_hm_long}"
+    footer_auth = f"{footer_auth} / {auth_hm_long}"
+    del_footer = f"{del_footer} / {del_hm_long}"
 
     _kpi_tile(
         ws,
@@ -968,6 +1088,7 @@ def _build_summary(
 
     _set_col_widths(ws, {1: 14, 2: 14, 3: 28, 4: 14, 5: 14, 6: 28})
     _set_print_layout(ws, landscape=True, fit_to_width=True, print_title_rows="1:6")
+    _professionalize_sheet(ws, title_rows=1, freeze="A7")
 
 
 def _build_weekly_pattern(ws: Worksheet, sd: dict[str, Any]) -> None:
@@ -1017,6 +1138,30 @@ def _build_weekly_pattern(ws: Worksheet, sd: dict[str, Any]) -> None:
         _apply_border_range(ws, r, 1, r, 6)
         ws.row_dimensions[r].height = float(LAYOUT["tall_data_row_height"])
 
+    total_row = 11
+    weekly_total = sum(
+        int((wp.get(dow) or {}).get("minutes") or 0) for dow in FULL_DOW
+    )
+    ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=3)
+    total_label = ws.cell(total_row, 1, value="WEEKLY TOTAL")
+    total_label.font = _f_total()
+    total_label.fill = FILL_TOTAL
+    total_label.alignment = Alignment(horizontal="right", vertical="center")
+    total_min = ws.cell(total_row, 4, value=weekly_total)
+    total_min.font = _f_total()
+    total_min.fill = FILL_TOTAL
+    total_min.number_format = "#,##0"
+    total_hm = ws.cell(total_row, 5, value=_fmt_hhmm_with_words(weekly_total))
+    total_hm.font = _f_total()
+    total_hm.fill = FILL_TOTAL
+    total_hm.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    total_words = ws.cell(total_row, 6, value=_fmt_hours_minutes_long(weekly_total))
+    total_words.font = _f_total()
+    total_words.fill = FILL_TOTAL
+    total_words.alignment = Alignment(horizontal="left", vertical="center")
+    _apply_border_range(ws, total_row, 1, total_row, 6)
+    ws.row_dimensions[total_row].height = float(LAYOUT["tall_data_row_height"])
+
     # Deviation callout below the grid (only if catchup present)
     catchup_iso = sd.get("catchup_date")
     if catchup_iso:
@@ -1062,6 +1207,13 @@ def _build_weekly_pattern(ws: Worksheet, sd: dict[str, Any]) -> None:
 
     _set_col_widths(ws, {1: 14, 2: 12, 3: 12, 4: 16, 5: 14, 6: 60})
     _set_print_layout(ws, landscape=True, fit_to_width=True, print_title_rows="1:3")
+    _add_excel_table(
+        ws,
+        ref="A3:F10",
+        name=f"{ws.title.replace(' ', '')}Table",
+        style=FILL_TABLE_BLUE,
+    )
+    _professionalize_sheet(ws, title_rows=1, freeze="A4", auto_filter="A3:F11")
 
 
 # --- Tab 3: Daily Schedule (invariant-checked) -------------------------------
@@ -1106,7 +1258,7 @@ def _build_daily_schedule(
 
     headers = [
         "Date", "DoW", "Shift Type", "Clock In", "Clock Out",
-        "Min (raw)", "HH:MM",
+        "Min (raw)", "HH:MM (+ h/m on week & month totals)",
     ] + task_names + ["Row Total"]
     _col_headers(ws, 3, headers)
 
@@ -1140,9 +1292,11 @@ def _build_daily_schedule(
         wk_min.font = _f_total()
         wk_min.number_format = "#,##0"
 
-        wk_hm = ws.cell(at_row, dur_hm_col, value=_fmt_hhmm(wk_total))
+        wk_hm = ws.cell(
+            at_row, dur_hm_col, value=_fmt_hhmm_with_words(wk_total)
+        )
         wk_hm.font = _f_total()
-        wk_hm.alignment = Alignment(horizontal="right")
+        wk_hm.alignment = Alignment(horizontal="right", wrap_text=True)
 
         wk_task_totals: dict[str, int] = {nm: 0 for nm in task_names}
         for d_in in days_in_week:
@@ -1273,9 +1427,11 @@ def _build_daily_schedule(
     traw = ws.cell(tot_row, 6, value=total_duration)
     traw.font = _f_total()
     traw.number_format = "#,##0"
-    tot_hm_cell = ws.cell(tot_row, dur_hm_col, value=_fmt_hhmm(total_duration))
+    tot_hm_cell = ws.cell(
+        tot_row, dur_hm_col, value=_fmt_hhmm_with_words(total_duration)
+    )
     tot_hm_cell.font = _f_total()
-    tot_hm_cell.alignment = Alignment(horizontal="right")
+    tot_hm_cell.alignment = Alignment(horizontal="right", wrap_text=True)
 
     task_totals: dict[str, int] = {nm: 0 for nm in task_names}
     for d in daily:
@@ -1335,7 +1491,7 @@ def _build_daily_schedule(
         4: 11,
         5: 11,
         6: 10,
-        dur_hm_col: 10,
+        dur_hm_col: 16,
     }
     for j in range(n_task_cols):
         widths[dur_hm_col + 1 + j] = float(tw)
@@ -1343,6 +1499,12 @@ def _build_daily_schedule(
     _set_col_widths(ws, widths)
     ws.freeze_panes = "A4"
     _set_print_layout(ws, landscape=False, fit_to_width=True, print_title_rows="1:3")
+    _professionalize_sheet(
+        ws,
+        title_rows=1,
+        freeze="A4",
+        auto_filter=f"A3:{get_column_letter(last_col)}{last_data_row}",
+    )
 
     return first_data_row, last_data_row, 6, row_total_col
 
@@ -1403,9 +1565,11 @@ def _build_schedule_math(ws: Worksheet, sd: dict[str, Any]) -> None:
     rows: list[tuple[str, Any, str]] = [
         ("Weekly minutes (Σ min/day × days/wk)", weekly, "#,##0"),
         ("Weekly HH:MM", _fmt_hhmm(weekly), "@"),
+        ("Weekly Hours + Minutes", _fmt_hours_minutes_long(weekly), "@"),
         ("Weeks per month (MDHHS rule)", WEEKS_PER_MONTH, "0.0"),
         ("Monthly target (weekly × 4.3, rounded)", monthly_target, "#,##0"),
         ("Monthly HH:MM", _fmt_hhmm(monthly_target), "@"),
+        ("Monthly Hours + Minutes", _fmt_hours_minutes_long(monthly_target), "@"),
         ("Monthly $ target", monthly_amount, "$#,##0.00"),
     ]
     for i, (label, val, fmt) in enumerate(rows):
@@ -1659,6 +1823,7 @@ def _build_schedule_math(ws: Worksheet, sd: dict[str, Any]) -> None:
 
     _set_col_widths(ws, {1: 38, 2: 14, 3: 14, 4: 14, 5: 14, 6: 14})
     _set_print_layout(ws, landscape=True, fit_to_width=True, print_title_rows="1:3")
+    _professionalize_sheet(ws, title_rows=1)
 
 
 def _write_task_reconciliation_subtotal_row(
@@ -2052,6 +2217,12 @@ def _build_task_reconciliation(
     pct_total.font = _f_total()
     pct_total.number_format = "0.0%"
     pct_total.alignment = Alignment(horizontal="right")
+    _add_excel_table(
+        ws,
+        ref=f"A3:{get_column_letter(last_col)}{gt_row}",
+        name="TaskReconciliationTable",
+        style=FILL_TABLE_GREEN,
+    )
 
     # --- Status row ---
     status_row = gt_row + 1
@@ -2120,6 +2291,12 @@ def _build_task_reconciliation(
         },
     )
     _set_print_layout(ws, landscape=True, fit_to_width=True, print_title_rows="1:3")
+    _professionalize_sheet(
+        ws,
+        title_rows=1,
+        freeze="A4",
+        auto_filter=f"A3:{get_column_letter(last_col)}{gt_row}",
+    )
 
 
 def _short(s: str, m: int) -> str:
@@ -2288,6 +2465,19 @@ def _build_instructions(ws: Worksheet, sd: dict[str, Any]) -> None:
 
     _set_col_widths(ws, {1: 5, 2: 62, 3: 14, 4: 14})
     _set_print_layout(ws, landscape=True, fit_to_width=True, print_title_rows="1:2")
+    _professionalize_sheet(ws, title_rows=1, freeze="A3")
+
+
+def _finalize_workbook_polish(wb: Workbook) -> None:
+    """Apply consistent tab styling and workbook metadata after every sheet is built."""
+    wb.properties.title = "MDHHS Plan of Care Workbook"
+    wb.properties.subject = "Home Help authorization schedule and reconciliation"
+    wb.properties.creator = "MDHHS Plan Builder"
+    for ws in wb.worksheets:
+        if ws.title in TAB_COLORS:
+            ws.sheet_properties.tabColor = TAB_COLORS[ws.title]
+        ws.sheet_view.showGridLines = False
+        ws.sheet_view.zoomScale = ws.sheet_view.zoomScale or 90
 
 
 # --- Public entry point ------------------------------------------------------
@@ -2343,6 +2533,7 @@ def build_xlsx(
     # Daily Schedule invariant — MUST hold for every row.
     _assert_daily_row_invariant(ws_daily, first_r, last_r, dur_col, rt_col)
 
+    _finalize_workbook_polish(wb)
     wb.save(output_path)
     _try_libreoffice_recalc(output_path)
 

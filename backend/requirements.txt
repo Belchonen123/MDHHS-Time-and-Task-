@@ -3,13 +3,21 @@ openpyxl>=3.1.0
 anthropic>=0.39.0
 python-dotenv>=1.0.0
 reportlab>=4.0.0
-pytest>=8.0.0
 fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
+uvicorn>=0.29.0
 python-multipart>=0.0.9
 sqlalchemy>=2.0.0
 aiofiles>=23.0.0
 pydantic>=2.0.0
-# OCR fallback for image-only / scanned PDFs. pypdfium2 is already pulled in
-# transitively by pdfplumber but we use its text + image-render APIs directly.
-rapidocr-onnxruntime>=1.3.24
+# OCR fallback for image-only / scanned PDFs. Keep these explicit so Vercel's
+# Python runtime-dependency installer does not prune the dynamically imported
+# OCR stack from serverless functions.
+pypdfium2>=5.0.0
+numpy>=2.0.0
+Pillow>=11.0.0
+onnxruntime>=1.20.0
+opencv-python-headless>=4.10.0
+# Patched wheel is upstream rapidocr-onnxruntime 1.4.4 with only the
+# desktop opencv-python dependency removed. We install opencv-python-headless
+# above so Vercel can import cv2 without libxcb/X11.
+./vendor/rapidocr_onnxruntime-1.4.4-1mdhhs-py3-none-any.whl

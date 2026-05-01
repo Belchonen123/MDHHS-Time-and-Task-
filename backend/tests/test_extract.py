@@ -24,6 +24,7 @@ from app.extract import (
     _compute_task_amounts,
     _extract_monthly_totals,
     _parse_task_from_line,
+    _rapidocr_result_to_text,
     extract_from_pdf,
 )
 
@@ -69,6 +70,37 @@ def test_latisha_golden_text_paired_headers() -> None:
     assert _extract_pay_rate_loose(text) == pytest.approx(27.0, abs=0.01)
 
 
+def test_blurry_phone_ocr_paired_headers() -> None:
+    from app.extract import _extract_paired_fields
+
+    text = """
+    SECTION1-CLIENTINFORMATION
+    Chient Name Clicnt ID Number
+    April Martin 27738883
+    County Name Case Number
+    82-WAYNE 233143-8
+    SECTION2-ADULTSERVICESINFORMATION
+    Adult Services Worker (ASW) Name ASW Phone Number
+    C Steckel 313-505-1452
+    ASW Emall Address Date
+    steckelc@michigan gov 04/30/2026
+    SECTION3-TASKS
+    Provider Namo ProviderPay Rate
+    Alegria Home Care $27.00
+    """
+
+    paired = _extract_paired_fields(text)
+
+    assert paired["client_name"] == "April Martin"
+    assert paired["client_id"] == "27738883"
+    assert paired["case_number"] == "233143-8"
+    assert paired["asw_name"] == "C Steckel"
+    assert paired["asw_phone"] == "313-505-1452"
+    assert paired["asw_email"] == "steckelc@michigan.gov"
+    assert paired["auth_date"] == "04/30/2026"
+    assert paired["provider_name"] == "Alegria Home Care"
+
+
 @pytest.mark.skipif(
     not LATISHA_FIXTURE.exists(),
     reason="Drop backend/tests/fixtures/latisha_avery.pdf to run full PDF extraction.",
@@ -92,6 +124,13 @@ def test_normalize_hhmm_does_not_mangle_currency_tokens() -> None:
 
     assert _normalize_token_hhmm("216.72") == "216.72"
     assert _normalize_token_hhmm("70.48") == "70:48"
+
+
+def test_parse_dollars_accepts_ocr_extra_decimal_grouping() -> None:
+    """Blurred OCR sometimes emits ``$1.093.28`` for ``$1,093.28``."""
+    from app.extract import parse_dollars
+
+    assert parse_dollars("$1.093.28") == pytest.approx(1093.28, abs=0.01)
 
 
 def test_extract_monthly_totals_accepts_ocr_dot_in_roll_up_time() -> None:
@@ -138,6 +177,18 @@ def test_ottilie_smith_pdf() -> None:
     assert bathing["min_per_day"] == 16
     assert bathing["days_per_week"] == 7
     assert bathing["monthly_amount"] == pytest.approx(216.72, abs=0.02)
+
+
+def test_parse_task_line_when_pdf_table_puts_days_before_time_per_day() -> None:
+    """6064-P column order Task | # days | time/day | month | $ in joined table text."""
+    line = "Bathing 7 days per week 00:10 05:01 $135.45"
+    parsed = _parse_task_from_line(line)
+    assert parsed is not None
+    assert parsed["task_name"] == "Bathing"
+    assert parsed["min_per_day"] == 10
+    assert parsed["days_per_week"] == 7
+    assert parsed["monthly_time_str"] == "05:01"
+    assert parsed["monthly_amount"] == pytest.approx(135.45, abs=0.01)
 
 
 def test_group_n_not_name() -> None:
@@ -260,3 +311,39 @@ def test_travel_for_shopping_still_not_mapped_to_iadl_shopping() -> None:
     parsed = _parse_task_from_line(line)
     assert parsed is not None
     assert parsed["task_name"] == "Travel For Shopping"
+
+
+def test_blurry_phone_ocr_task_aliases() -> None:
+    transferring = _parse_task_from_line("Transfeming 00:06 4daysperweek 01:43 S46.44")
+    shopping = _parse_task_from_line(
+        "Shopping for FoodiMeds 00:34 1dayperweek 02:26 $65.79"
+    )
+
+    assert transferring is not None
+    assert transferring["task_name"] == "Transferring"
+    assert transferring["days_per_week"] == 4
+    assert shopping is not None
+    assert shopping["task_name"] == "Shopping for Food/Meds"
+
+
+def test_rapidocr_fragments_are_rebuilt_into_table_rows() -> None:
+    """OCR boxes from one visual row must be sorted left-to-right before parsing."""
+    result = [
+        ([[300, 10], [340, 10], [340, 24], [300, 24]], "7 days per week", 0.95),
+        ([[10, 11], [80, 11], [80, 25], [10, 25]], "Bathing", 0.96),
+        ([[200, 10], [245, 10], [245, 24], [200, 24]], "00:16", 0.94),
+        ([[430, 11], [475, 11], [475, 25], [430, 25]], "8:02", 0.93),
+        ([[525, 10], [590, 10], [590, 24], [525, 24]], "$216.72", 0.91),
+        ([[12, 45], [90, 45], [90, 59], [12, 59]], "Dressing", 0.96),
+        ([[200, 45], [245, 45], [245, 59], [200, 59]], "00:14", 0.94),
+        ([[300, 46], [340, 46], [340, 60], [300, 60]], "7 days per week", 0.95),
+        ([[430, 45], [475, 45], [475, 59], [430, 59]], "7:01", 0.93),
+        ([[525, 45], [590, 45], [590, 59], [525, 59]], "$189.63", 0.91),
+    ]
+
+    text = _rapidocr_result_to_text(result)
+    rows = text.splitlines()
+
+    assert rows[0] == "Bathing 00:16 7 days per week 8:02 $216.72"
+    assert rows[1] == "Dressing 00:14 7 days per week 7:01 $189.63"
+    assert _parse_task_from_line(rows[0])["min_per_day"] == 16  # type: ignore[index]

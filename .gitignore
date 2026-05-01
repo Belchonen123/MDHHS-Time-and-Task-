@@ -12,3 +12,6 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 exports/
+.vercel
+backend/.pkg_tmp/
+backend/.pytest_tmp/

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +24,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 
 # Resolve paths relative to backend/ (parent of app/)
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = _BACKEND_DIR / "data"
-STORAGE_DIR = _BACKEND_DIR / "storage"
+
+if os.getenv("VERCEL"):
+    # Vercel serverless functions mount project files read-only under /var/task.
+    # SQLite and generated artifacts must live in /tmp for the invocation runtime.
+    _RUNTIME_DIR = Path(tempfile.gettempdir()) / "mdhhs-poc-builder"
+else:
+    _RUNTIME_DIR = _BACKEND_DIR
+
+DATA_DIR = _RUNTIME_DIR / "data"
+STORAGE_DIR = _RUNTIME_DIR / "storage"
 DATABASE_FILE = DATA_DIR / "clients.db"
 DATABASE_URL = f"sqlite:///{DATABASE_FILE.as_posix()}"
 

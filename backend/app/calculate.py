@@ -1285,10 +1285,9 @@ def default_config_for(
       capacity **without** changing how many times each calendar weekday
       appears in the month.
 
-    There is no Phase 2 that adds sessions to match the form total:
-    ``compute_mdhhs_form_minutes`` is a billing authorization cap, not a
-    calendar delivery target. Remaining gap vs. the form may surface in Check 5
-    until a billable-cap layer reconciles delivery to auth.
+    Phase 2 first snaps companion travel onto its parent errand pattern, then
+    adds default-only ISO-date overrides until delivered minutes match the
+    4.3-week form total when the remaining gap is reducible.
 
     ASM 120 **complex-care** lines (see ``extract.COMPLEX_CARE_TASK_NAMES``)
     never receive a hidden 7/3/2 default from task name alone — only the
@@ -1411,6 +1410,8 @@ def default_config_for(
     )
 
     # Phase 2 — companion co-placement (domain: travel rides with errand parent).
+    _coplace_companions(placements, dates)
+    _greedy_close_gap(placements, dates, target_monthly_min)
     _coplace_companions(placements, dates)
 
     return ScheduleConfig(tasks=placements, start_time_by_weekday=start_map)

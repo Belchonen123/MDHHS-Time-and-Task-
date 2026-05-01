@@ -16,6 +16,7 @@ import {
   firstAvailabilityPreflightViolation,
   visitWeekdaysUnionFromAuthorizedTasks,
 } from "@/lib/scheduleUtils"
+import { storeUploadArtifacts } from "@/lib/sessionArtifacts"
 import { defaultWorkerAvailability } from "@/lib/workerAvailability"
 import { cn } from "@/lib/utils"
 import type {
@@ -295,6 +296,7 @@ export function UploadZone({ onUploaded }: UploadZoneProps) {
       setUploading(true)
       try {
         const result = await uploadPDF(file, undefined, availabilityOverride)
+        storeUploadArtifacts(result)
         const name = result.client.client_name?.trim() || result.client.client_id
         toast.success(`Plan of care generated for ${name}`)
         if (!result.plan.validation_passed) {
