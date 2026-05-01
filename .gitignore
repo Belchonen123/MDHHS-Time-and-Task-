@@ -15,3 +15,4 @@ exports/
 .vercel
 backend/.pkg_tmp/
 backend/.pytest_tmp/
+logs/

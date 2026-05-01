@@ -65,6 +65,23 @@ function maybeAppendApiRoutingHint(message: string, res: Response): string {
   return `${message}\n\n${API_UPLOAD_ROUTING_HINT}`
 }
 
+function looksLikeBackendUnavailable(res: Response, message: string): boolean {
+  if (!uploadRelatedRequestUrl(typeof res.url === "string" ? res.url : "")) return false
+  const t = message.trim().toLowerCase()
+  return (
+    res.status === 502 ||
+    res.status === 503 ||
+    res.status === 504 ||
+    (res.status === 500 &&
+      (t === "500 internal server error" ||
+        t === "internal server error" ||
+        t.includes("proxy") ||
+        t.includes("econnrefused") ||
+        t.includes("connection refused") ||
+        t.includes("failed to fetch")))
+  )
+}
+
 function formatDayCapacityDetailMessage(o: DayCapacityDetail): string {
   const lines: string[] = [
     `${o.weekday}: ${o.needed_minutes} min needed / ${o.available_minutes} min available`,
@@ -178,12 +195,20 @@ async function throwIfResNotOk(res: Response): Promise<void> {
   if (res.status === 422) {
     toast.error(detailStr, { duration: 8000 })
   } else if (res.status >= 500) {
-    // 500-class — user can't fix it from the UI. Point at the terminal so
-    // the operator knows where to look.
-    toast.error("Something went wrong on the server", {
-      description: "Check the terminal logs for details.",
-      duration: 8000,
-    })
+    if (looksLikeBackendUnavailable(res, detailStr)) {
+      toast.error("Backend server not responding", {
+        description:
+          "Start the API from the project root with npm run dev:backend, then try the upload again.",
+        duration: 10_000,
+      })
+    } else {
+      // 500-class — user can't fix it from the UI. Point at the terminal so
+      // the operator knows where to look.
+      toast.error("Something went wrong on the server", {
+        description: "Check the terminal logs for details.",
+        duration: 8000,
+      })
+    }
   } else {
     toast.error(detailStr, { duration: 8000 })
   }
